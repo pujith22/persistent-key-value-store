@@ -1,0 +1,70 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Libraries
+*.lib
+*.dll
+*.so
+*.a
+
+# Executables
+*.exe
+a.out
+*.out
+
+# Build Directories
+bin/
+build/
+[Dd]ebug/
+[Rr]elease/
+obj/
+/target/
+
+# IDE-specific files (Visual Studio, VS Code, CMake, etc.)
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.opensdf
+*.sdf
+*.cache
+*.bak
+*.aps
+*.vcproj.*.user
+# VS Code
+.vscode/
+# Eclipse
+.project
+.cproject
+.settings/
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+# CLion
+.idea/
+
+# Log and data files (Database-specific and general)
+# General Logs
+*.log
+logs/
+**/logs/
+# MongoDB specific files/directories (default names for local instances)
+mongod.log
+/data/db/ # Default data directory for a local mongod instance
+# PostgreSQL specific files/directories (default names for local instances/logs)
+pg_log/
+postgresql.conf.sample
+pg_hba.conf.sample
+pg_ident.conf.sample
+# Note: actual PostgreSQL data directories and configuration files are typically outside the project root but these logs and sample files might appear.
+
+# Temporary and miscellaneous files
+*.tmp
+*.~
+*.swp
+[Tt]humbs.db
+.DS_Store
