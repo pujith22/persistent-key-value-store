@@ -27,20 +27,20 @@ const string home_page_html = "<html> <h1 style= \"color: brown;\"> Welcome to P
 
 "<h3 style= \"color: green;\"> ID: 25M0787 </h3>"
 
-"<h3 style= \"color: ocean-blue;\"> Route \t\t\t\t\t\t\t\t\t\t Description </h3>"
+"<table> <tr style= \"color: #191970;\"> <th> Route </th> <th> Description </th> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> GET /get_key/:key   \t\t-> \t\tReturns value associated with key if present else will throws an error response. </p>"
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> GET /get_key/:key  </td>  <td> Returns value associated with key if present else will throws an error response. </td> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> POST /bulk_query \t\t-> \t\t Tries to retrieve values for all queries in this post request, ignoring keys that are not present and passing the corresponding information in the response. </p>"
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> POST /bulk_query </td> <td> Tries to retrieve values for all queries in this post request, ignoring keys that are not present and passing the corresponding information in the response. </td> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> POST /insert/:key/:value \t\t-> \t\tInserts key-value pair provided in to the database if it doesn't exit already, otherwise throws an error response. </p>"
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> POST /insert/:key/:value </td> <td> Inserts key-value pair provided in to the database if it doesn't exit already, otherwise throws an error response. </td> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> PATCH /bulk_update \t\t-> \t\tProcess all insertions and update queries ignoring errors and sending response accordingly (Basically a way of commiting partial updates) </p> "
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> PATCH /bulk_update </td> <td>Process all insertions and update queries ignoring errors and sending response accordingly (Basically a way of commiting partial updates) </td> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> DELETE /delete_key/:key \t\t-> \t\tDeletes key from the key-value store if it exists, otherwise throws an error response. </p>"
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> DELETE /delete_key/:key </td> <td> Deletes key from the key-value store if it exists, otherwise throws an error response. </td> </tr>"
 
-"<p style= \"color: blue; font: 20px; font-style: italic;\"> PUT /update_key/:key/:value \t\t-> \t\tUpdates value corresponsing to 'key' with 'value' if 'key' exists and throws and error response otherwise. </p>"
-"</html>";
+"<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> PUT /update_key/:key/:value </td> <td> Updates value corresponsing to 'key' with 'value' if 'key' exists and throws and error response otherwise. </td> </tr>"
+"</table> </html>";
 
 void request_logger(const httplib::Request& request)
 {
