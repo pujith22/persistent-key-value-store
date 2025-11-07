@@ -19,7 +19,7 @@ A high-performance, persistent key-value store implemented in C++ with support a
 ┌─────────────┐
 │ REST Client │
 └──────┬──────┘
-       │ HTTPS
+       │ HTTP
 ┌──────▼──────────┐
 │  REST Server    │
 │  (cpp-httplib)  │
@@ -39,6 +39,11 @@ A high-performance, persistent key-value store implemented in C++ with support a
 │    PostgreSQL   │
 └─────────────────┘
 ```
+## Special Credits
+
+Niels Lohmann @https://nlohmann.me/ (for nlohmann/json library @ https://github.com/nlohmann/json)
+Yuji Hirose (for httplib.h library @ https://github.com/yhirose/cpp-httplib)
+
 
 ## Contributions
 
