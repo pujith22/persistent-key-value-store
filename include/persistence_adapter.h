@@ -47,22 +47,22 @@ public:
         std::vector<FailedOp> failures; // populated in Silent mode; in RollbackOnError contains at least the first failure
     };
 
-    // Executes a sequence of operations in a transaction.
-    // - RollbackOnError: abort whole txn on first failure (SQL error or 0 rows for update/remove)
-    // - Silent: continue on failures using savepoints and commit successes and collect failures
+    /* Executes a sequence of operations in a transaction.
+         - RollbackOnError: abort whole txn on first failure (SQL error or 0 rows for update/remove)
+         - Silent: continue on failures using savepoints and commit successes and collect failures */
     TxResult runTransaction(const std::vector<Operation>& ops, TxMode mode);
 
-    // Same as runTransaction but returns a JSON report.
-    // Example shape:
-    // {
-    //   "mode": "silent"|"rollback",
-    //   "success": true|false,
-    //   "results": [
-    //      {"op":"insert","key":1,"status":"ok"},
-    //      {"op":"get","key":2,"status":"ok","value":null},
-    //      {"op":"update","key":3,"status":"failed","error":"no rows affected"}
-    //   ]
-    // }
+    /* Same as runTransaction but returns a JSON report.
+        Example shape:
+        {
+          "mode": "silent"|"rollback",
+          "success": true|false,
+          "results": [
+             {"op":"insert","key":1,"status":"ok"},
+             {"op":"get","key":2,"status":"ok","value":null},
+             {"op":"update","key":3,"status":"failed","error":"no rows affected"}
+           ]
+    */
     nlohmann::json runTransactionJson(const std::vector<Operation>& ops, TxMode mode);
 
 private:

@@ -3,6 +3,8 @@
 #include <iostream>
 #include <sstream>
 #include <libpq-fe.h>
+#include <vector>
+#include "nlohmann/json.hpp"
 
 // Implementation of PersistenceAdapter using libpq (PostgreSQL C client)
 
@@ -190,3 +192,295 @@ std::unique_ptr<std::string> PersistenceAdapter::get(int key)
     return out;
 }
 
+PersistenceAdapter::TxResult PersistenceAdapter::runTransaction(const std::vector<Operation>& ops, TxMode mode)
+{
+    TxResult result{true, {}};
+    if (!p_ || !p_->conn) {
+        result.success = false;
+        result.failures.push_back({Operation{OpType::Insert, 0, ""}, "no connection"});
+        return result;
+    }
+
+    auto exec_simple = [&](const char* sql) -> bool {
+        PGresult* r = PQexec(p_->conn, sql);
+        bool ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+        if (!ok) std::cerr << "txn error: " << PQerrorMessage(p_->conn);
+        PQclear(r);
+        return ok;
+    };
+
+    if (!exec_simple("BEGIN")) {
+        result.success = false;
+        result.failures.push_back({Operation{OpType::Insert, 0, ""}, "BEGIN failed"});
+        return result;
+    }
+
+    int idx = 0;
+    for (const auto& op : ops) {
+        ++idx;
+        auto fail_this = [&](const std::string& msg) {
+            result.failures.push_back({op, msg});
+        };
+
+        if (mode == TxMode::Silent) {
+            // savepoint per-op
+            std::ostringstream sp;
+            sp << "SAVEPOINT sp_" << idx;
+            if (!exec_simple(sp.str().c_str())) {
+                fail_this("SAVEPOINT failed");
+                continue; // best effort
+            }
+
+            auto release_sp = [&]() {
+                std::ostringstream rel; rel << "RELEASE SAVEPOINT sp_" << idx; exec_simple(rel.str().c_str());
+            };
+            auto rollback_sp = [&]() {
+                std::ostringstream rb; rb << "ROLLBACK TO SAVEPOINT sp_" << idx; exec_simple(rb.str().c_str());
+                // release after rollback to clear savepoint
+                std::ostringstream rel; rel << "RELEASE SAVEPOINT sp_" << idx; exec_simple(rel.str().c_str());
+            };
+
+            bool ok = false;
+            int affected = 0;
+            // execute op
+            if (op.type == OpType::Insert) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[2] = { keyStr.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_insert", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (!ok) fail_this(PQerrorMessage(p_->conn));
+                else {
+                    const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 1; // treat insert as success even if 0 reported
+                }
+                PQclear(r);
+            } else if (op.type == OpType::Update) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[2] = { keyStr.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_update", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) {
+                    const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0;
+                    if (affected == 0) { ok = false; fail_this("no rows affected"); }
+                } else {
+                    fail_this(PQerrorMessage(p_->conn));
+                }
+                PQclear(r);
+            } else if (op.type == OpType::Remove) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[1] = { keyStr.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_delete", 1, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) {
+                    const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0;
+                    if (affected == 0) { ok = false; fail_this("no rows affected"); }
+                } else {
+                    fail_this(PQerrorMessage(p_->conn));
+                }
+                PQclear(r);
+            }
+
+            if (!ok) {
+                rollback_sp();
+                continue; // continue with next op
+            } else {
+                release_sp();
+            }
+
+        } else { // RollbackOnError
+            bool ok = true; int affected = 0;
+            if (op.type == OpType::Insert) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[2] = { keyStr.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_insert", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (!ok) fail_this(PQerrorMessage(p_->conn));
+                PQclear(r);
+            } else if (op.type == OpType::Update) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[2] = { keyStr.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_update", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) {
+                    const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0;
+                    if (affected == 0) { ok = false; fail_this("no rows affected"); }
+                } else {
+                    fail_this(PQerrorMessage(p_->conn));
+                }
+                PQclear(r);
+            } else if (op.type == OpType::Remove) {
+                std::string keyStr = std::to_string(op.key);
+                const char* params[1] = { keyStr.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_delete", 1, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) {
+                    const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0;
+                    if (affected == 0) { ok = false; fail_this("no rows affected"); }
+                } else {
+                    fail_this(PQerrorMessage(p_->conn));
+                }
+                PQclear(r);
+            }
+
+            if (!ok) {
+                exec_simple("ROLLBACK");
+                result.success = false;
+                return result;
+            }
+        }
+    }
+
+    if (!exec_simple("COMMIT")) {
+        result.success = false;
+        result.failures.push_back({Operation{OpType::Insert, 0, ""}, "COMMIT failed"});
+    }
+    return result;
+}
+
+nlohmann::json PersistenceAdapter::runTransactionJson(const std::vector<Operation>& ops, TxMode mode)
+{
+    nlohmann::json report;
+    report["mode"] = (mode == TxMode::Silent) ? "silent" : "rollback";
+    report["success"] = true;
+    report["results"] = nlohmann::json::array();
+
+    auto push_result = [&](OpType type, int key, const char* status, const std::string& error = std::string(), const nlohmann::json& value = nullptr) {
+        nlohmann::json item;
+        item["op"] = (type == OpType::Insert) ? "insert" : (type == OpType::Update) ? "update" : (type == OpType::Remove) ? "remove" : "get";
+        item["key"] = key;
+        item["status"] = status;
+        if (!error.empty()) item["error"] = error;
+        if (type == OpType::Get) item["value"] = value; // may be string or null
+        report["results"].push_back(std::move(item));
+    };
+
+    if (!p_ || !p_->conn) {
+        report["success"] = false;
+        push_result(OpType::Insert, 0, "failed", "no connection");
+        return report;
+    }
+
+    auto exec_simple = [&](const char* sql) -> bool {
+        PGresult* r = PQexec(p_->conn, sql);
+        bool ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+        if (!ok) std::cerr << "txn error: " << PQerrorMessage(p_->conn);
+        PQclear(r);
+        return ok;
+    };
+
+    if (!exec_simple("BEGIN")) {
+        report["success"] = false;
+        push_result(OpType::Insert, 0, "failed", "BEGIN failed");
+        return report;
+    }
+
+    int idx = 0;
+    for (const auto& op : ops) {
+        ++idx;
+        if (mode == TxMode::Silent) {
+            // savepoint per op
+            std::ostringstream sp; sp << "SAVEPOINT sp_" << idx;
+            if (!exec_simple(sp.str().c_str())) { push_result(op.type, op.key, "failed", "SAVEPOINT failed"); continue; }
+            auto release_sp = [&]() { std::ostringstream rel; rel << "RELEASE SAVEPOINT sp_" << idx; exec_simple(rel.str().c_str()); };
+            auto rollback_sp = [&]() { std::ostringstream rb; rb << "ROLLBACK TO SAVEPOINT sp_" << idx; exec_simple(rb.str().c_str()); std::ostringstream rel; rel << "RELEASE SAVEPOINT sp_" << idx; exec_simple(rel.str().c_str()); };
+
+            bool ok = true; int affected = 0;
+            if (op.type == OpType::Insert) {
+                std::string k = std::to_string(op.key);
+                const char* params[2] = { k.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_insert", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (!ok) push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn));
+                else push_result(op.type, op.key, "ok");
+                PQclear(r);
+            } else if (op.type == OpType::Update) {
+                std::string k = std::to_string(op.key);
+                const char* params[2] = { k.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_update", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) { const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0; if (affected == 0) { ok = false; push_result(op.type, op.key, "failed", "no rows affected"); } }
+                else { push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn)); }
+                if (ok) push_result(op.type, op.key, "ok");
+                PQclear(r);
+            } else if (op.type == OpType::Remove) {
+                std::string k = std::to_string(op.key);
+                const char* params[1] = { k.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_delete", 1, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) { const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0; if (affected == 0) { ok = false; push_result(op.type, op.key, "failed", "no rows affected"); } }
+                else { push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn)); }
+                if (ok) push_result(op.type, op.key, "ok");
+                PQclear(r);
+            } else if (op.type == OpType::Get) {
+                std::string k = std::to_string(op.key);
+                const char* params[1] = { k.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_select", 1, params, nullptr, nullptr, 0);
+                ok = (PQresultStatus(r) == PGRES_TUPLES_OK);
+                if (!ok) {
+                    push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn), nullptr);
+                } else {
+                    if (PQntuples(r) == 1 && PQnfields(r) == 1) {
+                        char* val = PQgetvalue(r, 0, 0);
+                        push_result(op.type, op.key, "ok", "", std::string(val ? val : ""));
+                    } else {
+                        // not found -> value null in silent mode
+                        push_result(op.type, op.key, "ok", "", nullptr);
+                    }
+                }
+                PQclear(r);
+            }
+
+            if (!ok) { rollback_sp(); } else { release_sp(); }
+
+        } else { // RollbackOnError
+            bool ok = true; int affected = 0;
+            if (op.type == OpType::Insert) {
+                std::string k = std::to_string(op.key);
+                const char* params[2] = { k.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_insert", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) push_result(op.type, op.key, "ok"); else push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn));
+                PQclear(r);
+            } else if (op.type == OpType::Update) {
+                std::string k = std::to_string(op.key);
+                const char* params[2] = { k.c_str(), op.value.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_update", 2, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) { const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0; if (affected == 0) { ok = false; push_result(op.type, op.key, "failed", "no rows affected"); } }
+                else { push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn)); }
+                if (ok) push_result(op.type, op.key, "ok");
+                PQclear(r);
+            } else if (op.type == OpType::Remove) {
+                std::string k = std::to_string(op.key);
+                const char* params[1] = { k.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_delete", 1, params, nullptr, nullptr, 0);
+                ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+                if (ok) { const char* t = PQcmdTuples(r); affected = (t && *t) ? std::stoi(t) : 0; if (affected == 0) { ok = false; push_result(op.type, op.key, "failed", "no rows affected"); } }
+                else { push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn)); }
+                if (ok) push_result(op.type, op.key, "ok");
+                PQclear(r);
+            } else if (op.type == OpType::Get) {
+                std::string k = std::to_string(op.key);
+                const char* params[1] = { k.c_str() };
+                PGresult* r = PQexecPrepared(p_->conn, "kv_select", 1, params, nullptr, nullptr, 0);
+                ok = (PQresultStatus(r) == PGRES_TUPLES_OK);
+                if (!ok) {
+                    push_result(op.type, op.key, "failed", PQerrorMessage(p_->conn), nullptr);
+                } else {
+                    if (PQntuples(r) == 1 && PQnfields(r) == 1) {
+                        char* val = PQgetvalue(r, 0, 0);
+                        push_result(op.type, op.key, "ok", "", std::string(val ? val : ""));
+                    } else {
+                        // not found -> ok with null value
+                        push_result(op.type, op.key, "ok", "", nullptr);
+                    }
+                }
+                PQclear(r);
+            }
+
+            if (!ok) { exec_simple("ROLLBACK"); report["success"] = false; return report; }
+        }
+    }
+
+    if (!exec_simple("COMMIT")) { report["success"] = false; push_result(OpType::Insert, 0, "failed", "COMMIT failed"); }
+    return report;
+}
