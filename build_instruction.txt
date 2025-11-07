@@ -31,3 +31,31 @@ fi
 
 # Run tests (uses PG_CONNINFO if set; otherwise reads config/db.json; fallback dbname=kvstore)
 ./test_persistence.out
+
+
+## to run production kv_server / test_server, you can run following commands.
+g++ -std=c++17 server.cpp main_server.cpp -I include -I third_party -o kv_server.out
+g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test_server.out
+
+
+## to run the executable, you may opt for the following structure
+./kv_server.out or ./test_server.out
+
+# optional cache policy:
+# ./kv_server.out --policy=lru
+# ./kv_server.out --policy=fifo
+# ./kv_server.out --policy=random
+
+# enable structured JSON logging for observability:
+# ./kv_server.out --json-logs
+
+#  New endpoints for observability endpoints:
+#   GET /health   -> {"status":"ok","uptime_ms":...}
+#   GET /metrics  -> {"entries":n,"hits":n,"misses":n,"evictions":n}
+#  Updated Entry points output:
+#   GET /        -> JSON service catalog listing all routes
+#   GET /home    -> Styled HTML homepage with quick-start details (we can edit assets/home.html to tweak layout)
+
+# final build command for server with persistence library
+
+g++ -std=c++17 server.cpp main_server.cpp persistence_adapter.cpp -I include -I third_party -I"$(pg_config --includedir)" -L"$(pg_config --libdir)" -lpq -o kv_server.out

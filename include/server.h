@@ -1,8 +1,13 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <httplib.h>
+#include <nlohmann/json.hpp>
+#include <chrono>
 #include "inline_cache.h"
+#include "config.h"
+#include "persistence_adapter.h"
 
 // KeyValueServer: wraps httplib::Server providing route setup and lifecycle control.
 // Responsibility:
@@ -18,8 +23,7 @@
 //
 class KeyValueServer {
 public:
-    KeyValueServer(const std::string& host, int port);
-    KeyValueServer(const std::string& host, int port, InlineCache::Policy policy);
+    KeyValueServer(const std::string& host, int port, InlineCache::Policy = InlineCache::Policy::LRU,  bool jsonLogging = false);
     ~KeyValueServer();
 
     // Register all routes on the underlying server instance.
@@ -38,12 +42,21 @@ private:
     std::string host_;
     int port_{};
     httplib::Server server_;
-    InlineCache cache_;
+    InlineCache inline_cache;
 
-    // Static HTML response for home page.
-    static const std::string kHomePageHtml;
+    struct RouteDescriptor {
+        const char* method;
+        const char* path;
+        const char* description;
+    };
+
+    static const std::vector<RouteDescriptor> routes_json;
+    static constexpr const char* home_page_template_path = "assets/home.html";
+
+    std::string renderHomePage() const;
 
     // ---- Handlers ----
+    void indexHandler(const httplib::Request& req, httplib::Response& res);
     void homeHandler(const httplib::Request& req, httplib::Response& res);
     void getKeyHandler(const httplib::Request& req, httplib::Response& res);
     void bulkQueryHandler(const httplib::Request& req, httplib::Response& res);
@@ -51,8 +64,25 @@ private:
     void bulkUpdateHandler(const httplib::Request& req, httplib::Response& res);
     void deletionHandler(const httplib::Request& req, httplib::Response& res);
     void updationHandler(const httplib::Request& req, httplib::Response& res);
+    void healthHandler(const httplib::Request& req, httplib::Response& res);
+    void metricsHandler(const httplib::Request& req, httplib::Response& res);
+    void stopHandler(const httplib::Request& req, httplib::Response& res);
 
     // Logging helpers
     void logRequest(const httplib::Request& req);
-    void logResponse(const httplib::Response& res);
+    void logResponse(const httplib::Response& res, std::chrono::steady_clock::duration duration);
+
+    // Helpers
+    static void json_response(httplib::Response& res, int status, const nlohmann::json& j, const char* reason = nullptr);
+    static bool parse_int(const std::string& s, int& out);
+
+    // logging mode flag
+    bool json_logging_enabled{false};
+    std::chrono::steady_clock::time_point server_boot_time{};
+    // optional persistence adapter (connected lazily at start())
+
+    std::unique_ptr<PersistenceAdapter> persistence_adapter;
+
+    // cached DB connection status message
+    std::string db_connection_status;
 };

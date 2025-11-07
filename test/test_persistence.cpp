@@ -28,10 +28,10 @@ int main()
         auto v = db.get(10);
         if (!expect_true(v && *v == "hello", "get key 10 should be 'hello'")) return 1;
 
-        std::cout << "[CRUD] insert same key=10 -> 'hello2' (upsert should update)\n";
-        if (!expect_true(db.insert(10, "hello2"), "upsert insert should succeed")) return 1;
+        std::cout << "[CRUD] insert same key=10 -> 'hello2' (update_or_insert should update)\n";
+        if (!expect_true(db.insert(10, "hello2"), "update_or_insert insert should succeed")) return 1;
         v = db.get(10);
-        if (!expect_true(v && *v == "hello2", "get after upsert should be 'hello2'")) return 1;
+        if (!expect_true(v && *v == "hello2", "get after update_or_insert should be 'hello2'")) return 1;
 
         std::cout << "[CRUD] update existing key=10 -> 'world'\n";
         if (!expect_true(db.update(10, "world"), "update existing should return true")) return 1;
@@ -87,7 +87,7 @@ int main()
             {PersistenceAdapter::OpType::Remove, 201, ""},  // 7 ok
             {PersistenceAdapter::OpType::Get,    201, ""},  // 8 ok -> null
             {PersistenceAdapter::OpType::Insert, 203, "c"}, // 9 ok
-            {PersistenceAdapter::OpType::Insert, 203, "d"}, // 10 ok (upsert)
+            {PersistenceAdapter::OpType::Insert, 203, "d"}, // 10 ok (update_or_insert)
             {PersistenceAdapter::OpType::Get,    203, ""}   // 11 ok -> "d"
         };
         auto js1 = db.runTransactionJson(js_ops_silent, PersistenceAdapter::TxMode::Silent);
@@ -102,7 +102,7 @@ int main()
         if (!expect_true(get_item(5)["op"]=="get" && get_item(5)["value"]=="b", "get(201) after update should be 'b'")) return 1;
         if (!expect_true(get_item(6)["status"]=="failed" && get_item(6)["error"]=="no rows affected", "remove(202) should fail")) return 1;
         if (!expect_true(get_item(8)["op"]=="get" && get_item(8)["value"].is_null(), "get(201) after remove should be null")) return 1;
-        if (!expect_true(get_item(11)["op"]=="get" && get_item(11)["value"]=="d", "get(203) after upsert should be 'd'")) return 1;
+        if (!expect_true(get_item(11)["op"]=="get" && get_item(11)["value"]=="d", "get(203) after update_or_insert should be 'd'")) return 1;
         // State after commit
         if (!expect_true(!db.get(201), "post JSON silent: 201 should be absent")) return 1;
         auto v203 = db.get(203);
