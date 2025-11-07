@@ -24,8 +24,8 @@ const std::vector<KeyValueServer::RouteDescriptor> KeyValueServer::routes_json =
     {"GET", "/stop", "Gracefully stop the server (testing/debug only), shouldn't be available in prod environment"}
 };
 
-KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy, bool jsonLogging)
-    : host_(host), port_(port), inline_cache(policy), json_logging_enabled(jsonLogging) {
+KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy, bool json_logging)
+    : host_(host), port_(port), inline_cache(policy), json_logging_enabled(json_logging) {
     server_boot_time = std::chrono::steady_clock::now();
 }
 
@@ -350,7 +350,7 @@ void KeyValueServer::bulkQueryHandler(const httplib::Request& req, httplib::Resp
 void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Response& res) {
     auto start = std::chrono::steady_clock::now();
     logRequest(req);
-    std::string keyStr, valStr;
+    std::string key_str, value_str;
     nlohmann::json out;
     std::string reason_msg;
     if (!validate_path_params(req, {"key","value"}, out, reason_msg)) {
@@ -358,19 +358,19 @@ void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Resp
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    if (req.path_params.count("value")) valStr = req.path_params.at("value");
-    out["key"] = keyStr;
-    out["value"] = valStr;
+    if (req.path_params.count("key")) key_str = req.path_params.at("key");
+    if (req.path_params.count("value")) value_str = req.path_params.at("value");
+    out["key"] = key_str;
+    out["value"] = value_str;
     int key;
-    if (!parse_int(keyStr, key)) {
+    if (!parse_int(key_str, key)) {
         out["error"] = "invalid key format";
         out["reason"] = "path parameter 'key' must be an integer";
         json_response(res, 400, out, "invalid_key_format");
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    bool inserted = inline_cache.insert_if_absent(key, valStr);
+    bool inserted = inline_cache.insert_if_absent(key, value_str);
     if (!inserted) {
         out["error"] = "key exists";
         out["existing_value"] = inline_cache.get(key).value_or("");
@@ -379,7 +379,7 @@ void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Resp
     } else {
         bool persist_ok = true;
         if (persistence_adapter) {
-            persist_ok = persistence_adapter->insert(key, valStr);
+            persist_ok = persistence_adapter->insert(key, value_str);
         }
         if (!persist_ok) {
             inline_cache.erase(key);
@@ -715,7 +715,7 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
 void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Response& res) {
     auto start = std::chrono::steady_clock::now();
     logRequest(req);
-    std::string keyStr;
+    std::string key_str;
     nlohmann::json out;
     std::string reason_msg;
     if (!validate_path_params(req, {"key"}, out, reason_msg)) {
@@ -723,10 +723,10 @@ void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Respo
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    out["key"] = keyStr;
+    if (req.path_params.count("key")) key_str = req.path_params.at("key");
+    out["key"] = key_str;
     int key;
-    if (!parse_int(keyStr, key)) {
+    if (!parse_int(key_str, key)) {
         out["error"] = "invalid key format";
         out["reason"] = "path parameter 'key' must be an integer";
         json_response(res, 400, out, "invalid_key_format");
@@ -772,7 +772,7 @@ void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Respo
 void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Response& res) {
     auto start = std::chrono::steady_clock::now();
     logRequest(req);
-    std::string keyStr, valStr;
+    std::string key_str, value_str;
     nlohmann::json out;
     std::string reason_msg;
     if (!validate_path_params(req, {"key","value"}, out, reason_msg)) {
@@ -780,12 +780,12 @@ void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Respo
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    if (req.path_params.count("value")) valStr = req.path_params.at("value");
-    out["key"] = keyStr;
-    out["value"] = valStr;
+    if (req.path_params.count("key")) key_str = req.path_params.at("key");
+    if (req.path_params.count("value")) value_str = req.path_params.at("value");
+    out["key"] = key_str;
+    out["value"] = value_str;
     int key;
-    if (!parse_int(keyStr, key)) {
+    if (!parse_int(key_str, key)) {
         out["error"] = "invalid key format";
         out["reason"] = "path parameter 'key' must be an integer";
         json_response(res, 400, out, "invalid_key_format");
@@ -813,7 +813,7 @@ void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Respo
         return;
     }
 
-    bool cache_updated = inline_cache.update(key, valStr);
+    bool cache_updated = inline_cache.update(key, value_str);
     if (!cache_updated) {
         out["error"] = "not found";
         out["reason"] = "key not present in cache";
@@ -826,7 +826,7 @@ void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Respo
     bool persist_ok = true;
     if (persistence_adapter) {
         persistence_checked = true;
-        persist_ok = persistence_adapter->update(key, valStr);
+    persist_ok = persistence_adapter->update(key, value_str);
     }
 
     if (!persist_ok) {
@@ -936,11 +936,11 @@ void KeyValueServer::stop() { server_.stop(); }
 
 httplib::Server& KeyValueServer::raw() { return server_; }
 
-void KeyValueServer::setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& statusLabel) {
+void KeyValueServer::setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& status_label) {
     persistence_adapter = std::move(provider);
     persistence_injected = persistence_adapter != nullptr;
     if (persistence_injected) {
-        db_connection_status = statusLabel;
+        db_connection_status = status_label;
     } else if (db_connection_status.empty()) {
         db_connection_status = "not configured";
     }

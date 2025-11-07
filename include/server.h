@@ -23,7 +23,7 @@
 //
 class KeyValueServer {
 public:
-    KeyValueServer(const std::string& host, int port, InlineCache::Policy = InlineCache::Policy::LRU,  bool jsonLogging = false);
+    KeyValueServer(const std::string& host, int port, InlineCache::Policy = InlineCache::Policy::LRU, bool json_logging = false);
     ~KeyValueServer();
 
     // Register all routes on the underlying server instance.
@@ -39,7 +39,7 @@ public:
     httplib::Server& raw();
 
     // Allow tests/consumers to inject custom persistence implementation.
-    void setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& statusLabel = "injected");
+    void setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& status_label = "injected");
 
     PersistenceProvider* persistence() const { return persistence_adapter.get(); }
 
