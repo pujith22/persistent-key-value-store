@@ -596,7 +596,7 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
     } else
 #endif
     {
-        transaction_mode = "emulated";
+        transaction_mode = "rollback";
         PersistenceProvider* provider = persistence_adapter.get();
         std::vector<std::function<void()>> undo;
         undo.reserve(parsed_ops.size());
@@ -685,7 +685,22 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
         }
     }
 
-    if (tx_success) {
+    bool has_failed_result = false;
+    if (results.is_array()) {
+        for (const auto& entry : results) {
+            if (!entry.is_object()) continue;
+            if (entry.value("status", std::string("failed")) != "ok") {
+                has_failed_result = true;
+                if (failure_reason.empty() && entry.contains("error") && entry["error"].is_string()) {
+                    failure_reason = entry["error"].get<std::string>();
+                }
+            }
+        }
+    }
+
+    bool overall_success = tx_success && !has_failed_result && errors.empty();
+
+    if (overall_success) {
         for (size_t i = 0; i < parsed_ops.size(); ++i) {
             const auto& parsed = parsed_ops[i];
             switch (parsed.op.type) {
@@ -709,7 +724,7 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
         }
     }
 
-    finalize(tx_success, requested, processed, succeeded, transaction_mode, results, failure_reason);
+    finalize(overall_success, requested, processed, succeeded, transaction_mode, results, failure_reason);
 }
 
 void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Response& res) {
