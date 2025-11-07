@@ -17,7 +17,10 @@ const std::string KeyValueServer::kHomePageHtml =
     "</table> </html>";
 
 KeyValueServer::KeyValueServer(const std::string& host, int port)
-    : host_(host), port_(port) {}
+    : host_(host), port_(port), cache_(InlineCache::Policy::LRU) {}
+
+KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy)
+    : host_(host), port_(port), cache_(policy) {}
 
 KeyValueServer::~KeyValueServer() = default;
 
@@ -47,7 +50,16 @@ void KeyValueServer::getKeyHandler(const httplib::Request& req, httplib::Respons
     } else if (req.path_params.count("key_id")) {
         id = req.path_params.at("key_id");
     }
-    res.set_content("Query for key: " + id + " (DB integration pending)\n", "text/plain");
+    std::string body = "Query for key: " + id;
+    try {
+        int key = std::stoi(id);
+        auto v = cache_.get(key);
+        if (v) body += ", value: " + *v + "\n";
+        else body += ", not found\n";
+    } catch (...) {
+        body += "\n";
+    }
+    res.set_content(body, "text/plain");
     logResponse(res);
 }
 
@@ -59,6 +71,15 @@ void KeyValueServer::bulkQueryHandler(const httplib::Request& req, httplib::Resp
 
 void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
+    // perform cache insert-if-absent using path params if available
+    std::string keyStr, valStr;
+    if (req.has_param("key")) keyStr = req.get_param_value("key");
+    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    if (req.has_param("value")) valStr = req.get_param_value("value");
+    else if (req.path_params.count("value")) valStr = req.path_params.at("value");
+    if (!keyStr.empty()) {
+        try { cache_.insert_if_absent(std::stoi(keyStr), valStr); } catch (...) {}
+    }
     res.set_content(req.body.empty() ? "Insertion endpoint (body empty)\n" : req.body, "text/json");
     logResponse(res);
 }
@@ -71,12 +92,23 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
 
 void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
+    std::string keyStr;
+    if (req.has_param("key")) keyStr = req.get_param_value("key");
+    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    if (!keyStr.empty()) { try { cache_.erase(std::stoi(keyStr)); } catch (...) {} }
     res.set_content(req.body.empty() ? "Deletion endpoint (body empty)\n" : req.body, "text/json");
     logResponse(res);
 }
 
 void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
+    // update only if present
+    std::string keyStr, valStr;
+    if (req.has_param("key")) keyStr = req.get_param_value("key");
+    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    if (req.has_param("value")) valStr = req.get_param_value("value");
+    else if (req.path_params.count("value")) valStr = req.path_params.at("value");
+    if (!keyStr.empty()) { try { cache_.update(std::stoi(keyStr), valStr); } catch (...) {} }
     res.set_content(req.body.empty() ? "Updation endpoint (body empty)\n" : req.body, "text/json");
     logResponse(res);
 }
