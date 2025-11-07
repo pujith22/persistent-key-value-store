@@ -38,6 +38,8 @@ A high-performance, persistent key-value store implemented in C++ with support a
 ┌──────▼──────────┐
 │    PostgreSQL   │
 └─────────────────┘
+
+Cache eviction policy include LRU, FIFO and Random Eviction limiting cache size to ~ 2 MB, by thoughtfully monitoring the inmemory cache size.
 ```
 ## Special Credits
 

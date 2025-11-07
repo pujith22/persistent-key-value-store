@@ -2,6 +2,7 @@
 
 #include <string>
 #include <httplib.h>
+#include "inline_cache.h"
 
 // KeyValueServer: wraps httplib::Server providing route setup and lifecycle control.
 // Responsibility:
@@ -18,6 +19,7 @@
 class KeyValueServer {
 public:
     KeyValueServer(const std::string& host, int port);
+    KeyValueServer(const std::string& host, int port, InlineCache::Policy policy);
     ~KeyValueServer();
 
     // Register all routes on the underlying server instance.
@@ -36,6 +38,7 @@ private:
     std::string host_;
     int port_{};
     httplib::Server server_;
+    InlineCache cache_;
 
     // Static HTML response for home page.
     static const std::string kHomePageHtml;
