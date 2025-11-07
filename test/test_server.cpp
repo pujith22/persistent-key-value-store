@@ -48,12 +48,24 @@ int main() {
     // 1) GET / and /home
     if (auto res = cli.Get("/")) {
         fails += !expect(res->status == 200, "GET / should return 200");
-        fails += !expect(res->get_header_value("Content-Type").find("text/html") != std::string::npos, "GET / should be text/html");
-        fails += !expect(res->body.find("Welcome to Persistent Key Value Server!!") != std::string::npos, "Home page should contain welcome text");
+        fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "GET / should be JSON");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("routes"), "Service catalog should list routes");
+        fails += !expect(body["routes"].is_array(), "Service catalog routes should be array");
+        bool hasHomeRoute = false;
+        for (const auto& route : body["routes"]) {
+            if (route.value("path", std::string()) == "/home") {
+                hasHomeRoute = true;
+                break;
+            }
+        }
+        fails += !expect(hasHomeRoute, "Service catalog should include /home route");
     } else { std::cerr << "GET / failed to connect\n"; ++fails; }
 
     if (auto res = cli.Get("/home")) {
         fails += !expect(res->status == 200, "GET /home should return 200");
+        fails += !expect(res->get_header_value("Content-Type").find("text/html") != std::string::npos, "GET /home should be HTML");
+        fails += !expect(res->body.find("Available Routes") != std::string::npos, "/home should render route table");
     } else { std::cerr << "GET /home failed\n"; ++fails; }
 
     // 2) GET /get_key/:key_id (initially not found => 404 JSON)

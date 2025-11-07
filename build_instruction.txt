@@ -52,3 +52,6 @@ g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test
 #  New endpoints for observability endpoints:
 #   GET /health   -> {"status":"ok","uptime_ms":...}
 #   GET /metrics  -> {"entries":n,"hits":n,"misses":n,"evictions":n}
+#  Updated Entry points output:
+#   GET /        -> JSON service catalog listing all routes
+#   GET /home    -> Styled HTML homepage with quick-start details (we can edit assets/home.html to tweak layout)

@@ -2,32 +2,22 @@
 #include "server.h"
 #include <iostream>
 #include <chrono>
+#include <sstream>
+#include <fstream>
 
-// Static home page HTML content
-const std::string KeyValueServer::kHomePageHtml =
-    "<html> <h1 style= \"color: brown;\"> Welcome to Persistent Key Value Server!!</h1>"
-    "<h3 style= \"color: green;\"> Author: Pujith Sai Kumar Korepara </h3>"
-    "<h3 style= \"color: green;\"> ID: 25M0787 </h3>"
-    "<table> <tr style= \"color: #191970;\"> <th> Route </th> <th> Description </th> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> GET /get_key/:key_id  </td>  <td> Returns value associated with key if present else will throws an error response. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> POST /bulk_query </td> <td> Tries to retrieve values for all queries in this post request, ignoring keys that are not present and passing the corresponding information in the response. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> POST /insert/:key/:value </td> <td> Inserts key-value pair provided into the database if it doesn't exit already, otherwise throws an error response. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> PATCH /bulk_update </td> <td>Process all insertions and update queries ignoring errors and sending response accordingly (partial commit). </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> DELETE /delete_key/:key </td> <td> Deletes key from the key-value store if it exists, otherwise throws an error response. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> PUT /update_key/:key/:value </td> <td> Updates value corresponding to 'key' with 'value' if 'key' exists; error otherwise. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> GET /health </td> <td> Server Health params like uptime etc. </td> </tr>"
-    "<tr style= \"color: blue; font: 20px; font-style: italic;\"> <td> GET /metrics </td> <td> Get cache metrics like hitrate/missrate entries and evictions </td> </tr>"
-    "</table> </html>";
-
-KeyValueServer::KeyValueServer(const std::string& host, int port)
-    : host_(host), port_(port), inline_cache(InlineCache::Policy::LRU) {
-    server_boot_time = std::chrono::steady_clock::now();
-}
-
-KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy)
-    : host_(host), port_(port), inline_cache(policy) {
-    server_boot_time = std::chrono::steady_clock::now();
-}
+const std::vector<KeyValueServer::RouteDescriptor> KeyValueServer::routes_json = {
+    {"GET", "/", "Machine-readable service catalog"},
+    {"GET", "/home", "Formatted documentation for available routes"},
+    {"GET", "/get_key/:key_id", "Return the cached value for the provided numeric key"},
+    {"POST", "/bulk_query", "Retrieve multiple keys in one request; missing keys noted in response"},
+    {"POST", "/insert/:key/:value", "Insert a key/value pair; conflicts return 409 with existing value"},
+    {"PATCH", "/bulk_update", "Partial commit pipeline for insert/update operations"},
+    {"DELETE", "/delete_key/:key", "Remove the provided key from the cache"},
+    {"PUT", "/update_key/:key/:value", "Update an existing key with a new value"},
+    {"GET", "/health", "Report service health and uptime"},
+    {"GET", "/metrics", "Expose cache metrics including hit/miss counts"},
+    {"GET", "/stop", "Gracefully stop the server (testing/debug only)"}
+};
 
 KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy, bool jsonLogging)
     : host_(host), port_(port), inline_cache(policy), json_logging_enabled(jsonLogging) {
@@ -63,9 +53,82 @@ void KeyValueServer::logResponse(const httplib::Response& res, std::chrono::stea
 void KeyValueServer::homeHandler(const httplib::Request& req, httplib::Response& res) {
     auto start = std::chrono::steady_clock::now();
     logRequest(req);
+
+    std::string html = renderHomePage();
     res.status = 200;
-    res.set_content(kHomePageHtml, "text/html");
+    res.set_content(html, "text/html; charset=utf-8");
     logResponse(res, std::chrono::steady_clock::now() - start);
+}
+
+void KeyValueServer::indexHandler(const httplib::Request& req, httplib::Response& res) {
+    auto start = std::chrono::steady_clock::now();
+    logRequest(req);
+
+    nlohmann::json payload;
+    payload["service"] = "Persistent Key Value Store";
+    payload["version"] = "1.0";
+    payload["description"] = "HTTP-accessible cache with inline persistence adapter hooks";
+
+    nlohmann::json routes = nlohmann::json::array();
+    for (const auto& route : routes_json) {
+        routes.push_back({
+            {"method", route.method},
+            {"path", route.path},
+            {"description", route.description}
+        });
+    }
+    payload["routes"] = routes;
+    payload["links"] = {
+        {"home", "/home"},
+        {"health", "/health"},
+        {"metrics", "/metrics"}
+    };
+
+    json_response(res, 200, payload);
+    logResponse(res, std::chrono::steady_clock::now() - start);
+}
+
+std::string KeyValueServer::renderHomePage() const {
+    std::ifstream file(home_page_template_path);
+    if (!file.is_open()) {
+        std::ostringstream fallback;
+        fallback << "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Persistent Key Value Store</title>"
+                 << "<style>body{font-family:Arial,sans-serif;padding:2rem;background:#f6f8fb;color:#1b1f23;}"
+                 << "h1{color:#24292e;} ul{padding-left:1.2rem;} li{margin-bottom:0.4rem;}</style></head><body>"
+                 << "<h1>Persistent Key Value Store</h1><p>Static homepage template not found at '<code>" << home_page_template_path
+                 << "</code>'. Rendering minimal fallback.</p><h2>Available Routes</h2><ul>";
+        for (const auto& route : routes_json) {
+            fallback << "<li><strong>" << route.method << "</strong> <code>" << route.path << "</code> &mdash; "
+                     << route.description << "</li>";
+        }
+        fallback << "</ul></body></html>";
+        return fallback.str();
+    }
+
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    std::string html = buffer.str();
+
+    auto replace_all = [&](const std::string& placeholder, const std::string& value) {
+        std::string::size_type pos = 0;
+        while ((pos = html.find(placeholder, pos)) != std::string::npos) {
+            html.replace(pos, placeholder.size(), value);
+            pos += value.size();
+        }
+    };
+
+    std::ostringstream rows;
+    for (const auto& route : routes_json) {
+        rows << "<tr><td class=\"route-method\">" << route.method << "</td><td><code>" << route.path
+             << "</code></td><td>" << route.description << "</td></tr>";
+    }
+
+    replace_all("{{ROUTE_ROWS}}", rows.str());
+    replace_all("{{SERVICE_NAME}}", "Persistent Key Value Store");
+    replace_all("{{SERVICE_TAGLINE}}", "with in-memory cache with complete observability");
+    replace_all("{{JSON_ENDPOINT}}", "/");
+
+    return html;
 }
 
 void KeyValueServer::getKeyHandler(const httplib::Request& req, httplib::Response& res) {
@@ -271,7 +334,7 @@ void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Respo
 }
 
 void KeyValueServer::setupRoutes() {
-    server_.Get("/", [this](const auto& r, auto& s) { homeHandler(r, s); });
+    server_.Get("/", [this](const auto& r, auto& s) { indexHandler(r, s); });
     server_.Get("/home", [this](const auto& r, auto& s) { homeHandler(r, s); });
     server_.Get("/get_key/:key_id", [this](const auto& r, auto& s) { getKeyHandler(r, s); });
     server_.Post("/bulk_query", [this](const auto& r, auto& s) { bulkQueryHandler(r, s); });

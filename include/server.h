@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -41,10 +42,19 @@ private:
     httplib::Server server_;
     InlineCache inline_cache;
 
-    // Static HTML response for home page.
-    static const std::string kHomePageHtml;
+    struct RouteDescriptor {
+        const char* method;
+        const char* path;
+        const char* description;
+    };
+
+    static const std::vector<RouteDescriptor> routes_json;
+    static constexpr const char* home_page_template_path = "assets/home.html";
+
+    std::string renderHomePage() const;
 
     // ---- Handlers ----
+    void indexHandler(const httplib::Request& req, httplib::Response& res);
     void homeHandler(const httplib::Request& req, httplib::Response& res);
     void getKeyHandler(const httplib::Request& req, httplib::Response& res);
     void bulkQueryHandler(const httplib::Request& req, httplib::Response& res);
