@@ -103,6 +103,10 @@ The test suite validates transactional semantics (including rollback on the firs
 
 Additional contact: WhatsApp/Telegram +91 9996159269
 
+## Postman API Collection
+
+<https://www.postman.com/altimetry-architect-63208177/persistent-key-value-server-public/collection/f47ai0l/persistent-key-value-server?action=share&creator=18466773>
+
 ## License
 
 This project is licensed under the terms of the MIT License. See `LICENSE` for details.
