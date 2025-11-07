@@ -8,6 +8,7 @@
 
 struct PersistenceAdapter::Impl {
     PGconn* conn{nullptr};
+    bool prepared{false};
 };
 
 static std::string to_string_int(int v) {
@@ -23,6 +24,44 @@ PersistenceAdapter::PersistenceAdapter(const std::string &conninfo)
         if (p_->conn) { PQfinish(p_->conn); p_->conn = nullptr; }
         throw std::runtime_error("Failed to open database connection: " + err);
     }
+
+    // Prepare statements for better performance
+    const char* prep_insert =
+        "INSERT INTO kv_store (key, value) VALUES ($1::int, $2::text) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = now();";
+    const char* prep_delete = "DELETE FROM kv_store WHERE key = $1::int;";
+    const char* prep_select = "SELECT value FROM kv_store WHERE key = $1::int;";
+    const char* prep_update = "UPDATE kv_store SET value = $2::text, created_at = now() WHERE key = $1::int;";
+
+    PGresult* r1 = PQprepare(p_->conn, "kv_insert", prep_insert, 2, nullptr);
+    if (PQresultStatus(r1) != PGRES_COMMAND_OK) {
+        std::string err = PQerrorMessage(p_->conn);
+        PQclear(r1);
+        throw std::runtime_error("Prepare kv_insert failed: " + err);
+    }
+    PQclear(r1);
+    PGresult* r2 = PQprepare(p_->conn, "kv_delete", prep_delete, 1, nullptr);
+    if (PQresultStatus(r2) != PGRES_COMMAND_OK) {
+        std::string err = PQerrorMessage(p_->conn);
+        PQclear(r2);
+        throw std::runtime_error("Prepare kv_delete failed: " + err);
+    }
+    PQclear(r2);
+    PGresult* r3 = PQprepare(p_->conn, "kv_select", prep_select, 1, nullptr);
+    if (PQresultStatus(r3) != PGRES_COMMAND_OK) {
+        std::string err = PQerrorMessage(p_->conn);
+        PQclear(r3);
+        throw std::runtime_error("Prepare kv_select failed: " + err);
+    }
+    PQclear(r3);
+    PGresult* r4 = PQprepare(p_->conn, "kv_update", prep_update, 2, nullptr);
+    if (PQresultStatus(r4) != PGRES_COMMAND_OK) {
+        std::string err = PQerrorMessage(p_->conn);
+        PQclear(r4);
+        throw std::runtime_error("Prepare kv_update failed: " + err);
+    }
+    PQclear(r4);
+    p_->prepared = true;
 }
 
 PersistenceAdapter::~PersistenceAdapter()
@@ -37,22 +76,17 @@ bool PersistenceAdapter::insert(int key, const std::string &value)
 {
     if (!p_ || !p_->conn) return false;
 
-    const char* sql =
-        "INSERT INTO kv_store (key, value) VALUES ($1::int, $2::text) "
-        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, created_at = now();";
-
     std::string keyStr = to_string_int(key);
     const char* params[2] = { keyStr.c_str(), value.c_str() };
 
-    PGresult* res = PQexecParams(
+    PGresult* res = PQexecPrepared(
         p_->conn,
-        sql,
-        2,           // number of params
-        nullptr,     // let the server infer types
+        "kv_insert",
+        2,
         params,
-        nullptr,     // param lengths (all text)
-        nullptr,     // param formats (all text)
-        0            // result in text format
+        nullptr,
+        nullptr,
+        0
     );
 
     if (PQresultStatus(res) != PGRES_COMMAND_OK) {
@@ -65,19 +99,46 @@ bool PersistenceAdapter::insert(int key, const std::string &value)
     return true;
 }
 
+bool PersistenceAdapter::update(int key, const std::string &value)
+{
+    if (!p_ || !p_->conn) return false;
+
+    std::string keyStr = to_string_int(key);
+    const char* params[2] = { keyStr.c_str(), value.c_str() };
+
+    PGresult* res = PQexecPrepared(
+        p_->conn,
+        "kv_update",
+        2,
+        params,
+        nullptr,
+        nullptr,
+        0
+    );
+
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        std::cerr << "update() error: " << PQerrorMessage(p_->conn);
+        PQclear(res);
+        return false;
+    }
+
+    const char* tuples = PQcmdTuples(res);
+    int affected = (tuples && *tuples) ? std::stoi(tuples) : 0;
+    PQclear(res);
+    return affected > 0;
+}
+
 bool PersistenceAdapter::remove(int key)
 {
     if (!p_ || !p_->conn) return false;
 
-    const char* sql = "DELETE FROM kv_store WHERE key = $1::int;";
     std::string keyStr = to_string_int(key);
     const char* params[1] = { keyStr.c_str() };
 
-    PGresult* res = PQexecParams(
+    PGresult* res = PQexecPrepared(
         p_->conn,
-        sql,
+        "kv_delete",
         1,
-        nullptr,
         params,
         nullptr,
         nullptr,
@@ -101,15 +162,13 @@ std::unique_ptr<std::string> PersistenceAdapter::get(int key)
 {
     if (!p_ || !p_->conn) return nullptr;
 
-    const char* sql = "SELECT value FROM kv_store WHERE key = $1::int;";
     std::string keyStr = to_string_int(key);
     const char* params[1] = { keyStr.c_str() };
 
-    PGresult* res = PQexecParams(
+    PGresult* res = PQexecPrepared(
         p_->conn,
-        sql,
+        "kv_select",
         1,
-        nullptr,
         params,
         nullptr,
         nullptr,
