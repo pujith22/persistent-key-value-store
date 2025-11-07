@@ -24,9 +24,9 @@ JSON_INC_SYS=$(brew --prefix nlohmann-json 2>/dev/null)/include
 # }
 
 if [ -f ./third_party/nlohmann/json.hpp ]; then
-	g++ -std=c++17 ./test/test_persistence.cpp ./test/persistence_adapter.cpp -I"$INC" -I"$JSON_INC_VENDOR" -I./include -L"$LIB" -lpq -o test_persistence.out
+	g++ -std=c++17 ./test/test_persistence.cpp persistence_adapter.cpp -I"$INC" -I"$JSON_INC_VENDOR" -I./include -L"$LIB" -lpq -o test_persistence.out
 else
-	g++ -std=c++17 ./test/test_persistence.cpp ./test/persistence_adapter.cpp -I"$INC" -I"$JSON_INC_SYS" -I./include -L"$LIB" -lpq -o test_persistence.out
+	g++ -std=c++17 ./test/test_persistence.cpp persistence_adapter.cpp -I"$INC" -I"$JSON_INC_SYS" -I./include -L"$LIB" -lpq -o test_persistence.out
 fi
 
 # Run tests (uses PG_CONNINFO if set; otherwise reads config/db.json; fallback dbname=kvstore)
