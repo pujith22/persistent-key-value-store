@@ -41,6 +41,9 @@ g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test
 ## to run the executable, you may opt for the following structure
 ./kv_server.out or ./test_server.out
 
+# Note: the production server expects a reachable PostgreSQL instance. If the
+# connection attempt fails during startup the process logs the failure and exits.
+
 # optional cache policy:
 # ./kv_server.out --policy=lru
 # ./kv_server.out --policy=fifo

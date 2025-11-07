@@ -14,7 +14,7 @@
 //  - Register HTTP routes (home, get_key, bulk_query, insert, bulk_update, delete_key, update_key, stop)
 //  - Start listening on a host:port
 //  - Provide structured logging of requests and responses
-//  - (Future) integrate PersistenceAdapter for DB operations
+//  - Require a PersistenceAdapter for DB operations (server startup fails without one)
 //
 // Usage:
 //  KeyValueServer srv{"localhost", 2222};
@@ -84,10 +84,9 @@ private:
     // logging mode flag
     bool json_logging_enabled{false};
     std::chrono::steady_clock::time_point server_boot_time{};
-    // optional persistence adapter (connected lazily at start())
-
+    // persistence adapter is required; start() fails fast if unavailable
     std::unique_ptr<PersistenceProvider> persistence_adapter;
-    bool persistence_injected{true};
+    bool persistence_injected{false};
 
     // cached DB connection status message
     std::string db_connection_status;

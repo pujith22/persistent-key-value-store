@@ -233,58 +233,114 @@ void KeyValueServer::bulkQueryHandler(const httplib::Request& req, httplib::Resp
     logRequest(req);
     nlohmann::json out;
     out["endpoint"] = "bulk_query";
-    // expect JSON array of integer keys in body
-    if (!req.body.empty()) {
+    nlohmann::json results = nlohmann::json::array();
+    nlohmann::json errors = nlohmann::json::array();
+
+    auto push_error = [&](const std::string& code, const std::string& reason, nlohmann::json detail = nlohmann::json()) {
+        nlohmann::json err{{"code", code}, {"reason", reason}};
+        if (!detail.is_null()) {
+            err["detail"] = std::move(detail);
+        }
+        errors.push_back(err);
+    };
+
+    size_t hit_cache = 0, hit_persistence = 0, miss = 0, type_mismatch = 0;
+
+    if (req.body.empty()) {
+        push_error("empty_body", "request body must include a JSON object with a 'data' array of integer keys");
+    } else {
         try {
-            auto j = nlohmann::json::parse(req.body);
-            if (j.is_array()) {
-                nlohmann::json results = nlohmann::json::array();
-                for (auto& el : j) {
-                    if (!el.is_number_integer()) continue;
-                    int k = el.get<int>();
-                    nlohmann::json item{{"key", k}};
-                    if (auto cached = inline_cache.get(k)) {
+            auto payload = nlohmann::json::parse(req.body);
+            if (!payload.is_object()) {
+                push_error("invalid_payload", "JSON body must be an object containing a 'data' array");
+            } else if (!payload.contains("data")) {
+                push_error("missing_data", "JSON object must contain a 'data' key mapped to an array");
+            } else if (!payload["data"].is_array()) {
+                nlohmann::json detail{{"provided_type", payload["data"].type_name()}};
+                push_error("invalid_data_type", "'data' must be an array of integers", detail);
+            } else {
+                const auto& data = payload["data"];
+                for (size_t idx = 0; idx < data.size(); ++idx) {
+                    const auto& el = data[idx];
+                    nlohmann::json item;
+                    item["index"] = idx;
+                    item["input"] = el;
+
+                    if (!el.is_number_integer()) {
+                        item["status"] = "type_mismatch";
+                        item["found"] = false;
+                        item["reason"] = "expected integer key";
+                        item["provided_type"] = el.type_name();
+                        results.push_back(item);
+                        ++type_mismatch;
+                        continue;
+                    }
+
+                    int key = el.get<int>();
+                    item["key"] = key;
+                    if (auto cached = inline_cache.get(key)) {
+                        item["status"] = "hit_cache";
                         item["found"] = true;
                         item["value"] = *cached;
                         item["source"] = "cache";
+                        item["reason"] = "value served from cache";
+                        ++hit_cache;
                     } else {
                         bool persistence_checked = false;
                         if (persistence_adapter) {
                             persistence_checked = true;
-                            if (auto persisted = persistence_adapter->get(k)) {
-                                inline_cache.update_or_insert(k, *persisted);
+                            if (auto persisted = persistence_adapter->get(key)) {
+                                inline_cache.update_or_insert(key, *persisted);
+                                item["status"] = "hit_persistence";
                                 item["found"] = true;
                                 item["value"] = *persisted;
                                 item["source"] = "persistence";
+                                item["reason"] = "value hydrated from persistence";
+                                item["cache_populated"] = true;
+                                ++hit_persistence;
                             } else {
+                                item["status"] = "miss";
                                 item["found"] = false;
                                 item["value"] = nullptr;
+                                item["reason"] = "key not present in cache or persistence";
+                                ++miss;
                             }
                         } else {
+                            item["status"] = "miss";
                             item["found"] = false;
                             item["value"] = nullptr;
+                            item["reason"] = "key not present in cache";
+                            ++miss;
                         }
-                        item["persistence_checked"] = persistence_checked;
+                        if (persistence_adapter) {
+                            item["persistence_checked"] = true;
+                        }
                     }
+
                     results.push_back(item);
                 }
-                out["results"] = results;
-                json_response(res, 200, out, "ok");
-            } else {
-                out["error"] = "expected array";
-                out["reason"] = "request body must be a JSON array of integers";
-                json_response(res, 400, out, "invalid_body");
             }
         } catch (const std::exception& e) {
-            out["error"] = std::string("parse error: ") + e.what();
-            out["reason"] = "failed to parse request JSON";
-            json_response(res, 400, out, "parse_error");
+            push_error("parse_error", std::string("failed to parse request JSON: ") + e.what());
         }
-    } else {
-        out["info"] = "empty body";
-        out["reason"] = "no payload provided";
-        json_response(res, 200, out, "ok");
     }
+
+    out["results"] = results;
+    if (!errors.empty()) {
+        out["errors"] = errors;
+    }
+
+    nlohmann::json summary;
+    summary["requested"] = results.size();
+    summary["hit_cache"] = hit_cache;
+    summary["hit_persistence"] = hit_persistence;
+    summary["misses"] = miss;
+    summary["type_mismatch"] = type_mismatch;
+    summary["top_level_errors"] = errors.size();
+    out["summary"] = summary;
+    out["success"] = errors.empty();
+
+    json_response(res, 200, out, "ok");
     logResponse(res, std::chrono::steady_clock::now() - start);
 }
 
@@ -618,54 +674,74 @@ void KeyValueServer::setupRoutes() {
 }
 
 bool KeyValueServer::start() {
-    // Attempt to initialize persistence adapter to report DB connection status in startup log.
-    // This is optional: when building without libpq, the database client is not available.
-
-    try {
-        std::string conn = load_conninfo();
-        persistence_adapter = std::make_unique<PersistenceAdapter>(conn);
-        db_connection_status = "ok";
-    } 
-    catch (const std::exception &e) {
-        db_connection_status = std::string("failed: ") + e.what();
-        persistence_adapter.reset();
-        std::cout<<"Unable to connect to postgresql, Error: "<<e.what();
-        exit(-1);
-    }
-
-    //  else if (persistence_injected && persistence_adapter && db_connection_status.empty()) {
-    //     db_connection_status = "injected";
-    // }
-
-    // if (!persistence_adapter && db_connection_status.empty()) {
-    //     db_connection_status = "disabled";
-    // }
-
-    // Emit structured startup log
-    if (json_logging_enabled) {
-        // epoch ms
-        auto now_sys = std::chrono::system_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_sys.time_since_epoch()).count();
-        nlohmann::json j;
-        j["type"] = "startup";
-        j["start_time_ms"] = ms;
-        // cache policy as string
-        switch (inline_cache.policy()) {
-            case InlineCache::Policy::LRU: j["cache_policy"] = "LRU"; break;
-            case InlineCache::Policy::FIFO: j["cache_policy"] = "FIFO"; break;
-            default: j["cache_policy"] = "Random"; break;
+    auto emit_startup_log = [&](bool success, const std::string& message) {
+        if (json_logging_enabled) {
+            auto now_sys = std::chrono::system_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_sys.time_since_epoch()).count();
+            nlohmann::json j;
+            j["type"] = "startup";
+            j["start_time_ms"] = ms;
+            switch (inline_cache.policy()) {
+                case InlineCache::Policy::LRU: j["cache_policy"] = "LRU"; break;
+                case InlineCache::Policy::FIFO: j["cache_policy"] = "FIFO"; break;
+                default: j["cache_policy"] = "Random"; break;
+            }
+            j["db_connection_status"] = db_connection_status;
+            j["json_logging_enabled"] = json_logging_enabled;
+            j["listen"] = { {"host", host_}, {"port", port_} };
+            j["ready"] = success;
+            if (!message.empty()) {
+                if (success) j["message"] = message;
+                else j["error"] = message;
+            }
+            if (!success) j["action"] = "shutdown";
+            std::cout << j.dump() << std::endl;
+        } else {
+            if (success) {
+                std::cout << "Http server listening at " << host_ << ":" << port_
+                          << " policy=" << (inline_cache.policy() == InlineCache::Policy::LRU ? "LRU" : inline_cache.policy() == InlineCache::Policy::FIFO ? "FIFO" : "Random")
+                          << " db_status=" << db_connection_status
+                          << " json_logs=" << (json_logging_enabled?"1":"0");
+                if (!message.empty()) {
+                    std::cout << ' ' << message;
+                }
+                std::cout << "\n";
+            } else {
+                std::cerr << "Startup aborted: " << message
+                          << " (db_status=" << db_connection_status << ")\n";
+            }
         }
-        j["db_connection_status"] = db_connection_status;
-        j["json_logging_enabled"] = json_logging_enabled;
-        j["listen"] = { {"host", host_}, {"port", port_} };
-        std::cout << j.dump() << std::endl;
-    } else {
-        std::cout << "Http server listening at " << host_ << ":" << port_
-                  << " policy=" << (inline_cache.policy() == InlineCache::Policy::LRU ? "LRU" : inline_cache.policy() == InlineCache::Policy::FIFO ? "FIFO" : "Random")
-                  << " db_status=" << db_connection_status
-                  << " json_logs=" << (json_logging_enabled?"1":"0") << "\n";
-    }
+    };
 
+    auto abort_startup = [&](const std::string& status, const std::string& reason) {
+        db_connection_status = status;
+        emit_startup_log(false, reason);
+        return false;
+    };
+
+    // Attempt to initialize persistence adapter. Startup is aborted if persistence is unavailable.
+    // if (!persistence_adapter) {
+// #if defined(USE_PG)
+        try {
+            std::string conn = load_conninfo();
+            persistence_adapter = std::make_unique<PersistenceAdapter>(conn);
+            db_connection_status = "ok";
+            persistence_injected = false;
+        } catch (const std::exception &e) {
+            return abort_startup(std::string("failed: ") + e.what(), std::string("unable to connect to persistence backend: ") + e.what());
+        }
+// #else
+//         return abort_startup("unavailable", "persistence adapter required but binary built without USE_PG support");
+// #endif
+//     } else if (persistence_injected && db_connection_status.empty()) {
+//         db_connection_status = "injected";
+//     }
+
+    // if (!persistence_adapter) {
+    //     return abort_startup("uninitialized", "persistence adapter could not be initialized");
+    // }
+
+    emit_startup_log(true, "");
     return server_.listen(host_, port_);
 }
 

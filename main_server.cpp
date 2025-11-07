@@ -30,6 +30,8 @@ int main(int argc, char** argv) {
     bool enable_json_logging = parse_json_logging(argc, argv);
     KeyValueServer server{"localhost", 2222, policy, enable_json_logging};
     server.setupRoutes();
-    server.start();
+    if (!server.start()) {
+        return 1;
+    }
     return 0;
 }
