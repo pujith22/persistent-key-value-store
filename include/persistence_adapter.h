@@ -16,6 +16,9 @@ public:
     // insert or update a key/value pair. Returns true on success.
     bool insert(int key, const std::string &value);
 
+    // update an existing key's value. Returns true if a row was updated (key existed).
+    bool update(int key, const std::string &value);
+
     // remove a key. Returns true if a row was deleted.
     bool remove(int key);
 
