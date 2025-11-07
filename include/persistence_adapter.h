@@ -10,22 +10,32 @@
 //
 // Usage: create with a libpq connection string (e.g. "dbname=kvstore user=...")
 
-class PersistenceAdapter {
+class PersistenceProvider {
+public:
+    virtual ~PersistenceProvider() = default;
+
+    virtual bool insert(int key, const std::string &value) = 0;
+    virtual bool update(int key, const std::string &value) = 0;
+    virtual bool remove(int key) = 0;
+    virtual std::unique_ptr<std::string> get(int key) = 0;
+};
+
+class PersistenceAdapter : public PersistenceProvider {
 public:
     explicit PersistenceAdapter(const std::string &conninfo);
     ~PersistenceAdapter();
 
     // insert or update a key/value pair. Returns true on success.
-    bool insert(int key, const std::string &value);
+    bool insert(int key, const std::string &value) override;
 
     // update an existing key's value. Returns true if a row was updated (key existed).
-    bool update(int key, const std::string &value);
+    bool update(int key, const std::string &value) override;
 
     // remove a key. Returns true if a row was deleted.
-    bool remove(int key);
+    bool remove(int key) override;
 
     // retrieve a value for a key. Returns nullptr if not found or on error.
-    std::unique_ptr<std::string> get(int key);
+    std::unique_ptr<std::string> get(int key) override;
 
     // Batch transactional execution with two modes
     enum class TxMode { RollbackOnError, Silent };

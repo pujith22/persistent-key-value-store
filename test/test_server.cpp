@@ -4,6 +4,9 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <unordered_map>
+#include <mutex>
+#include <optional>
 
 using namespace std::chrono_literals;
 
@@ -11,6 +14,83 @@ static bool expect(bool cond, const char* msg) {
     if (!cond) std::cerr << "ASSERT FAILED: " << msg << "\n";
     return cond;
 }
+
+struct FakePersistence : PersistenceProvider {
+    bool insert(int key, const std::string& value) override {
+        std::lock_guard<std::mutex> lock(mtx);
+        ++insert_calls;
+        store[key] = value;
+        return true;
+    }
+
+    bool update(int key, const std::string& value) override {
+        std::lock_guard<std::mutex> lock(mtx);
+        ++update_calls;
+        auto it = store.find(key);
+        if (it == store.end()) return false;
+        it->second = value;
+        return true;
+    }
+
+    bool remove(int key) override {
+        std::lock_guard<std::mutex> lock(mtx);
+        ++remove_calls;
+        return store.erase(key) > 0;
+    }
+
+    std::unique_ptr<std::string> get(int key) override {
+        std::lock_guard<std::mutex> lock(mtx);
+        ++get_calls;
+        auto it = store.find(key);
+        if (it == store.end()) return nullptr;
+        return std::make_unique<std::string>(it->second);
+    }
+
+    void setDirect(int key, const std::string& value) {
+        std::lock_guard<std::mutex> lock(mtx);
+        store[key] = value;
+    }
+
+    void eraseDirect(int key) {
+        std::lock_guard<std::mutex> lock(mtx);
+        store.erase(key);
+    }
+
+    std::optional<std::string> valueFor(int key) const {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = store.find(key);
+        if (it == store.end()) return std::nullopt;
+        return it->second;
+    }
+
+    int getCallCount() const {
+        std::lock_guard<std::mutex> lock(mtx);
+        return get_calls;
+    }
+
+    int insertCallCount() const {
+        std::lock_guard<std::mutex> lock(mtx);
+        return insert_calls;
+    }
+
+    int updateCallCount() const {
+        std::lock_guard<std::mutex> lock(mtx);
+        return update_calls;
+    }
+
+    int removeCallCount() const {
+        std::lock_guard<std::mutex> lock(mtx);
+        return remove_calls;
+    }
+
+private:
+    mutable std::mutex mtx;
+    std::unordered_map<int, std::string> store;
+    mutable int insert_calls{0};
+    mutable int update_calls{0};
+    mutable int remove_calls{0};
+    mutable int get_calls{0};
+};
 
 static bool wait_until_up(const std::string& host, int port, int retries = 100, int ms = 20) {
     httplib::Client cli(host, port);
@@ -29,6 +109,11 @@ int main() {
     const int port = 23876; // test port
 
     KeyValueServer server{host, port};
+    auto fakePersistence = std::make_unique<FakePersistence>();
+    auto* fake = fakePersistence.get();
+    fake->setDirect(222, "db-only");
+    fake->setDirect(333, "bulk-db");
+    server.setPersistenceProvider(std::move(fakePersistence), "test-double");
     server.setupRoutes();
 
     // start server in background thread
@@ -84,6 +169,22 @@ int main() {
         fails += !expect(body.contains("reason"), "Invalid key response should include reason field");
     } else { std::cerr << "GET /get_key invalid failed\n"; ++fails; }
 
+    // Read-through from persistence: key 222 only exists in fake persistence at start
+    if (auto res = cli.Get("/get_key/222")) {
+        fails += !expect(res->status == 200, "GET /get_key/222 should return 200 via persistence");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("value", "") == "db-only", "Read-through should return persistence value");
+        fails += !expect(body.value("source", "") == "persistence", "Read-through should note persistence source");
+    } else { std::cerr << "GET /get_key/222 failed\n"; ++fails; }
+
+    // Cache should now serve without hitting persistence again even if DB value changes
+    fake->setDirect(222, "db-updated");
+    if (auto res = cli.Get("/get_key/222")) {
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("value", "") == "db-only", "Cached value should be served on subsequent GET");
+    } else { std::cerr << "GET /get_key/222 second attempt failed\n"; ++fails; }
+    fails += !expect(fake->getCallCount() >= 1, "Persistence get should be called at least once for read-through");
+
     // 3) POST /bulk_query (empty body -> JSON info)
     if (auto res = cli.Post("/bulk_query")) {
         fails += !expect(res->status == 200, "POST /bulk_query should return 200");
@@ -96,6 +197,7 @@ int main() {
         fails += !expect(res->status == 201, "POST /insert should return 201 on create");
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.value("created", false) == true, "Insert JSON should mark created");
+        fails += !expect(fake->valueFor(1).value_or("") == "abc", "Insert should persist value");
     } else { std::cerr << "POST /insert failed\n"; ++fails; }
     if (auto res = cli.Post("/insert/notnum/abc", "", "application/json")) {
         fails += !expect(res->status == 400, "POST invalid key should return 400");
@@ -127,6 +229,24 @@ int main() {
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.contains("results"), "bulk_update should produce results array");
     } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
+    // Bulk query should retrieve mixed cache/persistence values
+    if (auto res = cli.Post("/bulk_query", "[222,333,444]", "application/json")) {
+        fails += !expect(res->status == 200, "POST /bulk_query array should return 200");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("results"), "Bulk query results should be present");
+        bool saw333 = false;
+        for (const auto& item : body["results"]) {
+            if (!item.is_object()) continue;
+            if (item.value("key", 0) == 333) {
+                saw333 = true;
+                fails += !expect(item.value("found", false) == true, "Key 333 should be found via persistence");
+                fails += !expect(item.value("value", "") == "bulk-db", "Key 333 should return persistence value");
+                fails += !expect(item.value("source", "") == "persistence", "Key 333 should indicate persistence source");
+            }
+        }
+        fails += !expect(saw333, "Bulk query should include key 333 entry");
+    } else { std::cerr << "POST /bulk_query array failed\n"; ++fails; }
+
     // invalid bulk_update payload -> 400
     if (auto res = cli.Patch("/bulk_update", "{\"bad\":1}", "application/json")) {
         fails += !expect(res->status == 400, "PATCH /bulk_update invalid payload should return 400");
@@ -150,6 +270,7 @@ int main() {
     // 6) DELETE /delete_key/:key remove from cache -> 204
     if (auto res = cli.Delete("/delete_key/1")) {
         fails += !expect(res->status == 204, "DELETE /delete_key/1 should return 204 on success");
+        fails += !expect(!fake->valueFor(1).has_value(), "Delete should remove persistence entry");
     } else { std::cerr << "DELETE /delete_key failed\n"; ++fails; }
     if (auto res = cli.Get("/get_key/1")) {
         fails += !expect(res->status == 404, "GET /get_key/1 should return 404 after deletion");
@@ -167,6 +288,7 @@ int main() {
         fails += !expect(res->status == 200, "PUT /update_key should return 200 on success");
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.value("updated", false) == true, "Update JSON should mark updated");
+        fails += !expect(fake->valueFor(1).value_or("") == "new", "Update should persist new value");
     } else { std::cerr << "PUT /update_key failed\n"; ++fails; }
     if (auto res = cli.Get("/get_key/1")) {
         auto body = nlohmann::json::parse(res->body);
