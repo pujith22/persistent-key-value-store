@@ -1,3 +1,11 @@
 # to migrate database schema, you may use the following commands
 
 psql -U pujith22 -d kvstore -f ./sql/init_kv.sql
+
+
+# for compiling and running the persistence layer in the test folder, you can run the following command
+
+INC=$(pg_config --includedir)
+LIB=$(pg_config --libdir)
+g++ -std=c++17 ./test/test_persistence.cpp ./test/persistence_adapter.cpp -I"$INC" -I./include -L"$LIB" -lpq -o test_persistence.out
+./test_persistence.out
