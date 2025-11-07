@@ -55,70 +55,65 @@ int main() {
         fails += !expect(res->status == 200, "GET /home should return 200");
     } else { std::cerr << "GET /home failed\n"; ++fails; }
 
-    // 2) GET /get_key/:key_id (initially not found)
+    // 2) GET /get_key/:key_id (initially not found => 404 JSON)
     if (auto res = cli.Get("/get_key/123")) {
-        fails += !expect(res->status == 200, "GET /get_key/123 should return 200");
-        fails += !expect(res->body.find("Query for key: 123") != std::string::npos, "Body should mention queried key");
-        fails += !expect(res->body.find("not found") != std::string::npos, "Initial GET should report not found");
+        fails += !expect(res->status == 404, "GET /get_key/123 should return 404 for missing key");
+        fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "get_key should be JSON");
+        fails += !expect(res->body.find("\"found\":false") != std::string::npos, "JSON should indicate found:false");
     } else { std::cerr << "GET /get_key failed\n"; ++fails; }
 
-    // 3) POST /bulk_query
+    // 3) POST /bulk_query (empty body -> JSON info)
     if (auto res = cli.Post("/bulk_query")) {
         fails += !expect(res->status == 200, "POST /bulk_query should return 200");
-        fails += !expect(res->body.find("Bulk query") != std::string::npos, "Bulk query body hint");
+        fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "bulk_query should be JSON");
+        fails += !expect(res->body.find("\"endpoint\":\"bulk_query\"") != std::string::npos, "Bulk query JSON should include endpoint");
     } else { std::cerr << "POST /bulk_query failed\n"; ++fails; }
 
-    // 4) POST /insert/:key/:value (echo body JSON + populate cache)
-    const char* insert_body = "{\"k\":1,\"v\":\"abc\"}";
-    if (auto res = cli.Post("/insert/1/abc", insert_body, "application/json")) {
-        fails += !expect(res->status == 200, "POST /insert should return 200");
-        fails += !expect(res->get_header_value("Content-Type").find("text/json") != std::string::npos, "insert content-type should be text/json");
-        fails += !expect(res->body == insert_body, "insert should echo JSON body");
+    // 4) POST /insert/:key/:value -> 201 JSON
+    if (auto res = cli.Post("/insert/1/abc", "", "application/json")) {
+        fails += !expect(res->status == 201, "POST /insert should return 201 on create");
+        fails += !expect(res->body.find("\"created\":true") != std::string::npos, "Insert JSON should mark created");
     } else { std::cerr << "POST /insert failed\n"; ++fails; }
-    // verify cache hit
+    // verify cache hit now returns 200 with found:true
     if (auto res = cli.Get("/get_key/1")) {
-        fails += !expect(res->body.find("value: abc") != std::string::npos, "GET /get_key/1 should show cached value abc");
+        fails += !expect(res->status == 200, "GET /get_key/1 should return 200 for existing key");
+        fails += !expect(res->body.find("\"found\":true") != std::string::npos, "GET /get_key/1 JSON found:true");
+        fails += !expect(res->body.find("\"value\":\"abc\"") != std::string::npos, "GET /get_key/1 should include value 'abc'");
     } else { std::cerr << "GET /get_key/1 failed\n"; ++fails; }
 
     // 5) PATCH /bulk_update (echo body JSON)
-    const char* patch_body = "{\"ops\":[1,2,3]}";
-    if (auto res = cli.Patch("/bulk_update", patch_body, "application/json")) {
+    // 5) PATCH /bulk_update with ops array
+    const char* patch_array = "[{\"op\":\"upsert\",\"key\":1,\"value\":\"abc\"}]";
+    if (auto res = cli.Patch("/bulk_update", patch_array, "application/json")) {
         fails += !expect(res->status == 200, "PATCH /bulk_update should return 200");
-        fails += !expect(res->body == patch_body, "bulk_update should echo JSON body");
+        fails += !expect(res->body.find("\"results\"") != std::string::npos, "bulk_update should produce results array");
     } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
 
-    // 6) DELETE /delete_key/:key remove from cache
+    // 6) DELETE /delete_key/:key remove from cache -> 204
     if (auto res = cli.Delete("/delete_key/1")) {
-        fails += !expect(res->status == 200, "DELETE /delete_key/1 should return 200");
-        fails += !expect(res->body.find("Deletion endpoint") != std::string::npos, "deletion body message");
+        fails += !expect(res->status == 204, "DELETE /delete_key/1 should return 204 on success");
     } else { std::cerr << "DELETE /delete_key failed\n"; ++fails; }
     if (auto res = cli.Get("/get_key/1")) {
-        fails += !expect(res->body.find("not found") != std::string::npos, "GET /get_key/1 should report not found after deletion");
+        fails += !expect(res->status == 404, "GET /get_key/1 should return 404 after deletion");
     } else { std::cerr << "GET /get_key/1 after delete failed\n"; ++fails; }
 
-    // 7) PUT /update_key/:key/:value (update only if key present - reinserting first)
-    if (auto res = cli.Post("/insert/1/abc", insert_body, "application/json")) {
-        (void)res;
-    }
-    const char* put_body = "{\"v\":\"new\"}";
-    if (auto res = cli.Put("/update_key/1/new", put_body, "application/json")) {
-        fails += !expect(res->status == 200, "PUT /update_key should return 200");
-        fails += !expect(res->body == put_body, "update should echo JSON body");
+    // 7) PUT /update_key/:key/:value (reinserting first) -> 200
+    if (auto res = cli.Post("/insert/1/abc", "", "application/json")) { /* created */ }
+    if (auto res = cli.Put("/update_key/1/new", "", "application/json")) {
+        fails += !expect(res->status == 200, "PUT /update_key should return 200 on success");
+        fails += !expect(res->body.find("\"updated\":true") != std::string::npos, "Update JSON should mark updated");
     } else { std::cerr << "PUT /update_key failed\n"; ++fails; }
     if (auto res = cli.Get("/get_key/1")) {
-        fails += !expect(res->body.find("value: new") != std::string::npos, "GET /get_key/1 should show updated value new");
+        fails += !expect(res->body.find("\"value\":\"new\"") != std::string::npos, "GET /get_key/1 should show updated value new");
     } else { std::cerr << "GET /get_key/1 after update failed\n"; ++fails; }
 
-    // 8) 404 route
+    // 8) 404 route (unknown)
     if (auto res = cli.Get("/no_such_route")) {
         fails += !expect(res->status == 404, "Unknown route should return 404");
     } else { std::cerr << "GET unknown route failed to connect\n"; ++fails; }
 
     // 9) Stop endpoint should stop the server, subsequent requests fail
-    if (auto res = cli.Get("/stop")) {
-        // allow server to stop
-        std::this_thread::sleep_for(100ms);
-    }
+    if (auto res = cli.Get("/stop")) { std::this_thread::sleep_for(100ms); }
 
     // After stop, expect connection failure
     {

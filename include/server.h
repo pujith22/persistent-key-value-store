@@ -2,6 +2,7 @@
 
 #include <string>
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 #include "inline_cache.h"
 
 // KeyValueServer: wraps httplib::Server providing route setup and lifecycle control.
@@ -55,4 +56,8 @@ private:
     // Logging helpers
     void logRequest(const httplib::Request& req);
     void logResponse(const httplib::Response& res);
+
+    // Helpers
+    static void json_response(httplib::Response& res, int status, const nlohmann::json& j);
+    static bool parse_int(const std::string& s, int& out);
 };

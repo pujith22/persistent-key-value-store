@@ -1,6 +1,7 @@
 // Refactored implementation: KeyValueServer class defined in server.h
 #include "server.h"
 #include <iostream>
+#include <chrono>
 
 // Static home page HTML content
 const std::string KeyValueServer::kHomePageHtml =
@@ -25,19 +26,18 @@ KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::P
 KeyValueServer::~KeyValueServer() = default;
 
 void KeyValueServer::logRequest(const httplib::Request& req) {
-    std::cout << "\n" << req.method << " request received at " << req.path << " endpoint.\n";
+    std::cout << "[REQUEST] method=" << req.method << " path=" << req.path << "\n";
 }
 
 void KeyValueServer::logResponse(const httplib::Response& res) {
-    std::cout << "\n{\nStatus: " << res.status
-              << "\n Reason: " << res.reason
-              << "\n Version: " << res.version
-              << "\n Body: " << res.body
-              << "\n}\n";
+    std::cout << "[RESPONSE] status=" << res.status << " reason=" << res.reason
+              << " ct=" << res.get_header_value("Content-Type")
+              << " bytes=" << res.body.size() << "\n";
 }
 
 void KeyValueServer::homeHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
+    res.status = 200;
     res.set_content(kHomePageHtml, "text/html");
     logResponse(res);
 }
@@ -45,71 +45,185 @@ void KeyValueServer::homeHandler(const httplib::Request& req, httplib::Response&
 void KeyValueServer::getKeyHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
     std::string id;
-    if (req.has_param("key_id")) {
-        id = req.get_param_value("key_id");
-    } else if (req.path_params.count("key_id")) {
-        id = req.path_params.at("key_id");
+    if (req.has_param("key_id")) id = req.get_param_value("key_id");
+    else if (req.path_params.count("key_id")) id = req.path_params.at("key_id");
+    int key;
+    nlohmann::json out;
+    out["query_key"] = id;
+    if (!parse_int(id, key)) {
+        out["error"] = "invalid key format";
+        json_response(res, 400, out);
+        logResponse(res);
+        return;
     }
-    std::string body = "Query for key: " + id;
-    try {
-        int key = std::stoi(id);
-        auto v = cache_.get(key);
-        if (v) body += ", value: " + *v + "\n";
-        else body += ", not found\n";
-    } catch (...) {
-        body += "\n";
+    auto v = cache_.get(key);
+    if (v) {
+        out["found"] = true;
+        out["value"] = *v;
+        json_response(res, 200, out);
+    } else {
+        out["found"] = false;
+        json_response(res, 404, out);
     }
-    res.set_content(body, "text/plain");
     logResponse(res);
 }
 
 void KeyValueServer::bulkQueryHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
-    res.set_content("Bulk query endpoint (DB integration pending)\n", "text/plain");
+    nlohmann::json out;
+    out["endpoint"] = "bulk_query";
+    // expect JSON array of integer keys in body
+    if (!req.body.empty()) {
+        try {
+            auto j = nlohmann::json::parse(req.body);
+            if (j.is_array()) {
+                nlohmann::json results = nlohmann::json::array();
+                for (auto& el : j) {
+                    if (el.is_number_integer()) {
+                        int k = el.get<int>();
+                        auto v = cache_.get(k);
+                        results.push_back({{"key", k}, {"found", !!v}, {"value", v ? *v : nullptr}});
+                    }
+                }
+                out["results"] = results;
+                json_response(res, 200, out);
+            } else {
+                out["error"] = "expected array";
+                json_response(res, 400, out);
+            }
+        } catch (const std::exception& e) {
+            out["error"] = std::string("parse error: ") + e.what();
+            json_response(res, 400, out);
+        }
+    } else {
+        out["info"] = "empty body";
+        json_response(res, 200, out);
+    }
     logResponse(res);
 }
 
 void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
-    // perform cache insert-if-absent using path params if available
     std::string keyStr, valStr;
-    if (req.has_param("key")) keyStr = req.get_param_value("key");
-    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    if (req.has_param("value")) valStr = req.get_param_value("value");
-    else if (req.path_params.count("value")) valStr = req.path_params.at("value");
-    if (!keyStr.empty()) {
-        try { cache_.insert_if_absent(std::stoi(keyStr), valStr); } catch (...) {}
+    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    if (req.path_params.count("value")) valStr = req.path_params.at("value");
+    nlohmann::json out;
+    out["key"] = keyStr;
+    out["value"] = valStr;
+    int key;
+    if (!parse_int(keyStr, key)) {
+        out["error"] = "invalid key format";
+        json_response(res, 400, out);
+        logResponse(res);
+        return;
     }
-    res.set_content(req.body.empty() ? "Insertion endpoint (body empty)\n" : req.body, "text/json");
+    auto existing = cache_.get(key);
+    if (existing) {
+        out["error"] = "key exists";
+        out["existing_value"] = *existing;
+        json_response(res, 409, out);
+    } else {
+        cache_.insert_if_absent(key, valStr);
+        out["created"] = true;
+        json_response(res, 201, out);
+    }
     logResponse(res);
 }
 
 void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
-    res.set_content(req.body.empty() ? "Bulk update endpoint (body empty)\n" : req.body, "text/json");
+    nlohmann::json out;
+    out["endpoint"] = "bulk_update";
+    if (!req.body.empty()) {
+        try {
+            auto j = nlohmann::json::parse(req.body);
+            if (!j.is_array()) {
+                out["error"] = "expected array of {op,key,value}";
+                json_response(res, 400, out);
+            } else {
+                nlohmann::json results = nlohmann::json::array();
+                for (auto& op : j) {
+                    nlohmann::json r;
+                    if (op.contains("key") && op["key"].is_number_integer()) {
+                        int k = op["key"].get<int>();
+                        std::string v = op.value("value", "");
+                        std::string action = op.value("op", "upsert");
+                        bool ok=false;
+                        if (action == "insert") {
+                            if (!cache_.get(k)) { cache_.insert_if_absent(k, v); ok=true; } else { r["error"] = "exists"; }
+                        } else if (action == "update") {
+                            ok = cache_.update(k, v); if (!ok) r["error"] = "missing";
+                        } else { // upsert
+                            ok = !cache_.upsert(k, v); // upsert returns false if updated existing
+                        }
+                        r["key"] = k;
+                        r["op"] = action;
+                        r["success"] = ok;
+                    } else {
+                        r["error"] = "invalid key";
+                    }
+                    results.push_back(r);
+                }
+                out["results"] = results;
+                json_response(res, 200, out);
+            }
+        } catch (const std::exception& e) {
+            out["error"] = std::string("parse error: ") + e.what();
+            json_response(res, 400, out);
+        }
+    } else {
+        out["info"] = "empty body";
+        json_response(res, 200, out);
+    }
     logResponse(res);
 }
 
 void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
     std::string keyStr;
-    if (req.has_param("key")) keyStr = req.get_param_value("key");
-    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    if (!keyStr.empty()) { try { cache_.erase(std::stoi(keyStr)); } catch (...) {} }
-    res.set_content(req.body.empty() ? "Deletion endpoint (body empty)\n" : req.body, "text/json");
+    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    nlohmann::json out;
+    out["key"] = keyStr;
+    int key;
+    if (!parse_int(keyStr, key)) {
+        out["error"] = "invalid key format";
+        json_response(res, 400, out);
+        logResponse(res);
+        return;
+    }
+    auto existed = cache_.erase(key);
+    if (existed) {
+        json_response(res, 204, out);
+    } else {
+        out["error"] = "not found";
+        json_response(res, 404, out);
+    }
     logResponse(res);
 }
 
 void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Response& res) {
     logRequest(req);
-    // update only if present
     std::string keyStr, valStr;
-    if (req.has_param("key")) keyStr = req.get_param_value("key");
-    else if (req.path_params.count("key")) keyStr = req.path_params.at("key");
-    if (req.has_param("value")) valStr = req.get_param_value("value");
-    else if (req.path_params.count("value")) valStr = req.path_params.at("value");
-    if (!keyStr.empty()) { try { cache_.update(std::stoi(keyStr), valStr); } catch (...) {} }
-    res.set_content(req.body.empty() ? "Updation endpoint (body empty)\n" : req.body, "text/json");
+    if (req.path_params.count("key")) keyStr = req.path_params.at("key");
+    if (req.path_params.count("value")) valStr = req.path_params.at("value");
+    nlohmann::json out;
+    out["key"] = keyStr;
+    out["value"] = valStr;
+    int key;
+    if (!parse_int(keyStr, key)) {
+        out["error"] = "invalid key format";
+        json_response(res, 400, out);
+        logResponse(res);
+        return;
+    }
+    bool updated = cache_.update(key, valStr);
+    if (updated) {
+        out["updated"] = true;
+        json_response(res, 200, out);
+    } else {
+        out["error"] = "not found";
+        json_response(res, 404, out);
+    }
     logResponse(res);
 }
 
@@ -133,3 +247,15 @@ bool KeyValueServer::start() {
 void KeyValueServer::stop() { server_.stop(); }
 
 httplib::Server& KeyValueServer::raw() { return server_; }
+
+// ---- Helpers ----
+void KeyValueServer::json_response(httplib::Response& res, int status, const nlohmann::json& j) {
+    res.status = status;
+    res.set_content(j.dump(), "application/json");
+}
+
+bool KeyValueServer::parse_int(const std::string& s, int& out) {
+    try {
+        size_t idx=0; int v = std::stoi(s, &idx); if (idx != s.size()) return false; out = v; return true;
+    } catch (...) { return false; }
+}
