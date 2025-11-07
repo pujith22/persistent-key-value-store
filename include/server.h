@@ -38,6 +38,11 @@ public:
     // Access underlying httplib server if advanced customization needed.
     httplib::Server& raw();
 
+    // Allow tests/consumers to inject custom persistence implementation.
+    void setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& statusLabel = "injected");
+
+    PersistenceProvider* persistence() const { return persistence_adapter.get(); }
+
 private:
     std::string host_;
     int port_{};
@@ -81,7 +86,8 @@ private:
     std::chrono::steady_clock::time_point server_boot_time{};
     // optional persistence adapter (connected lazily at start())
 
-    std::unique_ptr<PersistenceAdapter> persistence_adapter;
+    std::unique_ptr<PersistenceProvider> persistence_adapter;
+    bool persistence_injected{true};
 
     // cached DB connection status message
     std::string db_connection_status;

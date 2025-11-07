@@ -4,6 +4,8 @@
 #include <chrono>
 #include <sstream>
 #include <fstream>
+#include <optional>
+#include <utility>
 
 const std::vector<KeyValueServer::RouteDescriptor> KeyValueServer::routes_json = {
     {"GET", "/", "Machine-readable service catalog"},
@@ -204,8 +206,23 @@ void KeyValueServer::getKeyHandler(const httplib::Request& req, httplib::Respons
         out["value"] = *v;
         json_response(res, 200, out, "ok");
     } else {
+        bool persistence_checked = false;
+        if (persistence_adapter) {
+            persistence_checked = true;
+            if (auto persisted = persistence_adapter->get(key)) {
+                out["found"] = true;
+                out["value"] = *persisted;
+                out["source"] = "persistence";
+                bool inserted_cache = inline_cache.update_or_insert(key, *persisted);
+                out["cache_populated"] = inserted_cache;
+                json_response(res, 200, out, "ok");
+                logResponse(res, std::chrono::steady_clock::now() - start);
+                return;
+            }
+        }
         out["found"] = false;
-        out["reason"] = "key not present in cache";
+        out["reason"] = persistence_checked ? "key not present in cache or persistence" : "key not present in cache";
+        out["persistence_checked"] = persistence_checked;
         json_response(res, 404, out, "not_found");
     }
     logResponse(res, std::chrono::steady_clock::now() - start);
@@ -223,11 +240,33 @@ void KeyValueServer::bulkQueryHandler(const httplib::Request& req, httplib::Resp
             if (j.is_array()) {
                 nlohmann::json results = nlohmann::json::array();
                 for (auto& el : j) {
-                    if (el.is_number_integer()) {
-                        int k = el.get<int>();
-                        auto v = inline_cache.get(k);
-                        results.push_back({{"key", k}, {"found", !!v}, {"value", v ? *v : nullptr}});
+                    if (!el.is_number_integer()) continue;
+                    int k = el.get<int>();
+                    nlohmann::json item{{"key", k}};
+                    if (auto cached = inline_cache.get(k)) {
+                        item["found"] = true;
+                        item["value"] = *cached;
+                        item["source"] = "cache";
+                    } else {
+                        bool persistence_checked = false;
+                        if (persistence_adapter) {
+                            persistence_checked = true;
+                            if (auto persisted = persistence_adapter->get(k)) {
+                                inline_cache.update_or_insert(k, *persisted);
+                                item["found"] = true;
+                                item["value"] = *persisted;
+                                item["source"] = "persistence";
+                            } else {
+                                item["found"] = false;
+                                item["value"] = nullptr;
+                            }
+                        } else {
+                            item["found"] = false;
+                            item["value"] = nullptr;
+                        }
+                        item["persistence_checked"] = persistence_checked;
                     }
+                    results.push_back(item);
                 }
                 out["results"] = results;
                 json_response(res, 200, out, "ok");
@@ -279,8 +318,20 @@ void KeyValueServer::insertionHandler(const httplib::Request& req, httplib::Resp
         out["reason"] = "insert rejected because key already exists";
         json_response(res, 409, out, "conflict_key_exists");
     } else {
-        out["created"] = true;
-        json_response(res, 201, out, "created");
+        bool persist_ok = true;
+        if (persistence_adapter) {
+            persist_ok = persistence_adapter->insert(key, valStr);
+        }
+        if (!persist_ok) {
+            inline_cache.erase(key);
+            out["error"] = "persistence_failure";
+            out["reason"] = "database insert failed";
+            json_response(res, 500, out, "persistence_error");
+        } else {
+            out["created"] = true;
+            out["persisted"] = static_cast<bool>(persistence_adapter);
+            json_response(res, 201, out, "created");
+        }
     }
     logResponse(res, std::chrono::steady_clock::now() - start);
 }
@@ -301,42 +352,106 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
                 nlohmann::json results = nlohmann::json::array();
                 for (auto& op : j) {
                     nlohmann::json r;
-                    if (op.contains("key") && op["key"].is_number_integer()) {
-                        int k = op["key"].get<int>();
-                        std::string v = op.value("value", "");
-                        std::string action = op.value("op", "update_or_insert");
-                        bool ok = false;
-                        if (action == "insert") {
-                            bool inserted = inline_cache.insert_if_absent(k, v);
-                            ok = inserted;
-                            if (!inserted) {
-                                            r["error"] = "exists";
-                                            r["reason"] = "insert failed because key already present in cache";
-                            }
-                            r["inserted_new"] = inserted;
-                        } else if (action == "update") {
-                            ok = inline_cache.update(k, v);
-                            if (!ok) {
-                                r["error"] = "missing";
-                                r["reason"] = "update failed because key not present in cache";
-                            }
-                        } else if (action == "update_or_insert") {
-                            bool inserted = inline_cache.update_or_insert(k, v);
-                            ok = true;
-                            r["inserted_new"] = inserted;
-                        } else {
-                            r["error"] = "invalid op";
-                            r["reason"] = "operation must be one of insert, update, update_or_insert";
-                        }
-                        r["key"] = k;
-                        r["op"] = action;
-                        r["value"] = v;
-                        r["success"] = ok;
-                    } else {
+                    if (!(op.contains("key") && op["key"].is_number_integer())) {
                         r["error"] = "invalid key";
                         r["reason"] = "operation key must be an integer";
                         r["success"] = false;
+                        results.push_back(r);
+                        continue;
                     }
+
+                    int k = op["key"].get<int>();
+                    std::string v = op.value("value", "");
+                    std::string action = op.value("op", "update_or_insert");
+                    r["key"] = k;
+                    r["op"] = action;
+                    r["value"] = v;
+
+                    bool success = false;
+                    bool persistence_checked = false;
+
+                    if (action == "insert") {
+                        bool inserted = inline_cache.insert_if_absent(k, v);
+                        r["inserted_new"] = inserted;
+                        if (!inserted) {
+                            r["error"] = "exists";
+                            r["reason"] = "insert failed because key already present in cache";
+                        } else {
+                            bool persist_ok = true;
+                            if (persistence_adapter) {
+                                persistence_checked = true;
+                                persist_ok = persistence_adapter->insert(k, v);
+                            }
+                            if (!persist_ok) {
+                                inline_cache.erase(k);
+                                r["error"] = "persistence_failure";
+                                r["reason"] = "database insert failed";
+                            } else {
+                                success = true;
+                                if (persistence_adapter) r["persisted"] = true;
+                            }
+                        }
+                    } else if (action == "update") {
+                        std::optional<std::string> previous = inline_cache.get(k);
+                        bool hydrated = false;
+                        if (!previous && persistence_adapter) {
+                            persistence_checked = true;
+                            if (auto persisted = persistence_adapter->get(k)) {
+                                inline_cache.update_or_insert(k, *persisted);
+                                previous = inline_cache.get(k);
+                                hydrated = true;
+                            }
+                        }
+                        if (!previous) {
+                            r["error"] = "missing";
+                            r["reason"] = "update failed because key not present";
+                        } else {
+                            bool cache_updated = inline_cache.update(k, v);
+                            if (!cache_updated) {
+                                r["error"] = "missing";
+                                r["reason"] = "update failed because key not present";
+                            } else {
+                                bool persist_ok = true;
+                                if (persistence_adapter) {
+                                    persistence_checked = true;
+                                    persist_ok = persistence_adapter->update(k, v);
+                                }
+                                if (!persist_ok) {
+                                    if (previous.has_value()) inline_cache.update_or_insert(k, previous.value());
+                                    else inline_cache.erase(k);
+                                    r["error"] = "persistence_failure";
+                                    r["reason"] = "database update failed";
+                                } else {
+                                    success = true;
+                                    if (hydrated) r["hydrated_from_persistence"] = true;
+                                }
+                            }
+                        }
+                    } else if (action == "update_or_insert") {
+                        std::optional<std::string> previous = inline_cache.get(k);
+                        bool inserted = inline_cache.update_or_insert(k, v);
+                        r["inserted_new"] = inserted;
+                        bool persist_ok = true;
+                        if (persistence_adapter) {
+                            persistence_checked = true;
+                            persist_ok = persistence_adapter->insert(k, v);
+                        }
+                        if (!persist_ok) {
+                            if (previous.has_value()) inline_cache.update_or_insert(k, previous.value());
+                            else inline_cache.erase(k);
+                            r["error"] = "persistence_failure";
+                            r["reason"] = "database upsert failed";
+                        } else {
+                            success = true;
+                            if (persistence_adapter) r["persisted"] = true;
+                        }
+                    } else {
+                        r["error"] = "invalid op";
+                        r["reason"] = "operation must be one of insert, update, update_or_insert";
+                    }
+
+                    if (persistence_checked) r["persistence_checked"] = true;
+                    r["success"] = success;
                     results.push_back(r);
                 }
                 out["results"] = results;
@@ -376,13 +491,37 @@ void KeyValueServer::deletionHandler(const httplib::Request& req, httplib::Respo
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    auto existed = inline_cache.erase(key);
-    if (existed) {
-        // success
+    std::optional<std::string> previous = inline_cache.get(key);
+    bool cache_removed = inline_cache.erase(key);
+    bool persistence_checked = false;
+    bool persistence_removed = false;
+    bool persistence_failure = false;
+
+    if (persistence_adapter) {
+        persistence_checked = true;
+        persistence_removed = persistence_adapter->remove(key);
+        if (!persistence_removed && cache_removed) {
+            persistence_failure = true;
+        }
+    }
+
+    if (persistence_failure) {
+        if (previous.has_value()) inline_cache.update_or_insert(key, previous.value());
+        out["error"] = "persistence_failure";
+        out["reason"] = "database delete failed";
+        if (persistence_checked) out["persistence_checked"] = true;
+        json_response(res, 500, out, "persistence_error");
+        logResponse(res, std::chrono::steady_clock::now() - start);
+        return;
+    }
+
+    if (cache_removed || persistence_removed) {
+        if (persistence_checked) out["persistence_checked"] = true;
         json_response(res, 204, out, "deleted");
     } else {
         out["error"] = "not found";
-        out["reason"] = "key not present in cache";
+        out["reason"] = persistence_checked ? "key not present in cache or persistence" : "key not present in cache";
+        if (persistence_checked) out["persistence_checked"] = true;
         json_response(res, 404, out, "not_found");
     }
     logResponse(res, std::chrono::steady_clock::now() - start);
@@ -411,14 +550,55 @@ void KeyValueServer::updationHandler(const httplib::Request& req, httplib::Respo
         logResponse(res, std::chrono::steady_clock::now() - start);
         return;
     }
-    bool updated = inline_cache.update(key, valStr);
-    if (updated) {
-        out["updated"] = true;
-        json_response(res, 200, out, "updated");
-    } else {
+    std::optional<std::string> previous = inline_cache.get(key);
+    bool hydrated = false;
+    bool persistence_checked = false;
+    if (!previous && persistence_adapter) {
+        persistence_checked = true;
+        if (auto persisted = persistence_adapter->get(key)) {
+            inline_cache.update_or_insert(key, *persisted);
+            previous = inline_cache.get(key);
+            hydrated = true;
+        }
+    }
+
+    if (!previous) {
+        out["error"] = "not found";
+        out["reason"] = persistence_checked ? "key not present in cache or persistence" : "key not present in cache";
+        if (persistence_checked) out["persistence_checked"] = true;
+        json_response(res, 404, out, "not_found");
+        logResponse(res, std::chrono::steady_clock::now() - start);
+        return;
+    }
+
+    bool cache_updated = inline_cache.update(key, valStr);
+    if (!cache_updated) {
         out["error"] = "not found";
         out["reason"] = "key not present in cache";
+        if (persistence_checked) out["persistence_checked"] = true;
         json_response(res, 404, out, "not_found");
+        logResponse(res, std::chrono::steady_clock::now() - start);
+        return;
+    }
+
+    bool persist_ok = true;
+    if (persistence_adapter) {
+        persistence_checked = true;
+        persist_ok = persistence_adapter->update(key, valStr);
+    }
+
+    if (!persist_ok) {
+        if (previous.has_value()) inline_cache.update(key, previous.value());
+        out["error"] = "persistence_failure";
+        out["reason"] = "database update failed";
+        if (persistence_checked) out["persistence_checked"] = true;
+        json_response(res, 500, out, "persistence_error");
+    } else {
+        out["updated"] = true;
+        if (persistence_adapter) out["persisted"] = true;
+        if (hydrated) out["hydrated_from_persistence"] = true;
+        if (persistence_checked) out["persistence_checked"] = true;
+        json_response(res, 200, out, "updated");
     }
     logResponse(res, std::chrono::steady_clock::now() - start);
 }
@@ -440,14 +620,26 @@ void KeyValueServer::setupRoutes() {
 bool KeyValueServer::start() {
     // Attempt to initialize persistence adapter to report DB connection status in startup log.
     // This is optional: when building without libpq, the database client is not available.
+
     try {
         std::string conn = load_conninfo();
         persistence_adapter = std::make_unique<PersistenceAdapter>(conn);
         db_connection_status = "ok";
-    } catch (const std::exception &e) {
+    } 
+    catch (const std::exception &e) {
         db_connection_status = std::string("failed: ") + e.what();
         persistence_adapter.reset();
+        std::cout<<"Unable to connect to postgresql, Error: "<<e.what();
+        exit(-1);
     }
+
+    //  else if (persistence_injected && persistence_adapter && db_connection_status.empty()) {
+    //     db_connection_status = "injected";
+    // }
+
+    // if (!persistence_adapter && db_connection_status.empty()) {
+    //     db_connection_status = "disabled";
+    // }
 
     // Emit structured startup log
     if (json_logging_enabled) {
@@ -480,6 +672,16 @@ bool KeyValueServer::start() {
 void KeyValueServer::stop() { server_.stop(); }
 
 httplib::Server& KeyValueServer::raw() { return server_; }
+
+void KeyValueServer::setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& statusLabel) {
+    persistence_adapter = std::move(provider);
+    persistence_injected = persistence_adapter != nullptr;
+    if (persistence_injected) {
+        db_connection_status = statusLabel;
+    } else if (db_connection_status.empty()) {
+        db_connection_status = "not configured";
+    }
+}
 
 // ---- Helpers ----
 void KeyValueServer::json_response(httplib::Response& res, int status, const nlohmann::json& j, const char* reason) {

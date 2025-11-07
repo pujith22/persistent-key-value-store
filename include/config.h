@@ -14,10 +14,6 @@
 // 3) Provided defaultValue (defaults to "dbname=kvstore")
 
 inline std::string load_conninfo(const std::string &defaultValue = "dbname=kvstore") {
-    // fetching from env if it exist
-    if (const char* env = std::getenv("PG_CONNINFO")) {
-        if (*env) return std::string(env);
-    }
 
     //  reeading from config/db.json (full-fledged JSON parsing via nlohmann/json)
     try {
