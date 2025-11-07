@@ -74,12 +74,14 @@ int main() {
         fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "get_key should be JSON");
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.value("found", true) == false, "JSON should indicate found:false");
+    fails += !expect(body.value("reason", "").find("not present") != std::string::npos, "Missing key response should include reason");
     } else { std::cerr << "GET /get_key failed\n"; ++fails; }
     // invalid key format -> 400
     if (auto res = cli.Get("/get_key/not-a-number")) {
         fails += !expect(res->status == 400, "GET invalid key should return 400");
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.value("error", "") == "invalid key format", "Invalid key error message");
+        fails += !expect(body.contains("reason"), "Invalid key response should include reason field");
     } else { std::cerr << "GET /get_key invalid failed\n"; ++fails; }
 
     // 3) POST /bulk_query (empty body -> JSON info)
@@ -97,6 +99,10 @@ int main() {
     } else { std::cerr << "POST /insert failed\n"; ++fails; }
     if (auto res = cli.Post("/insert/notnum/abc", "", "application/json")) {
         fails += !expect(res->status == 400, "POST invalid key should return 400");
+        {
+            auto body = nlohmann::json::parse(res->body);
+            fails += !expect(body.contains("reason"), "Insert invalid key should include reason in response");
+        }
     } else { std::cerr << "POST /insert invalid failed\n"; ++fails; }
     // verify cache hit now returns 200 with found:true
     if (auto res = cli.Get("/get_key/1")) {
@@ -110,6 +116,7 @@ int main() {
         fails += !expect(res->status == 409, "POST /insert existing should return 409");
         auto body = nlohmann::json::parse(res->body);
         fails += !expect(body.contains("existing_value"), "Conflict response should include existing_value");
+    fails += !expect(body.value("reason", "").find("exists") != std::string::npos, "Conflict response should include reason");
     } else { std::cerr << "POST /insert conflict failed\n"; ++fails; }
 
     // 5) PATCH /bulk_update (echo body JSON)
@@ -123,12 +130,22 @@ int main() {
     // invalid bulk_update payload -> 400
     if (auto res = cli.Patch("/bulk_update", "{\"bad\":1}", "application/json")) {
         fails += !expect(res->status == 400, "PATCH /bulk_update invalid payload should return 400");
+        auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.value("reason", "").find("array") != std::string::npos, "Bulk update invalid payload should include reason");
     } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
 
     // invalid bulk query payload -> 400
     if (auto res = cli.Post("/bulk_query", "{\"unexpected\":true}", "application/json")) {
         fails += !expect(res->status == 400, "POST /bulk_query invalid payload should return 400");
+        auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.value("reason", "").find("array") != std::string::npos, "Bulk query invalid payload should indicate array expectation");
     } else { std::cerr << "POST /bulk_query invalid failed\n"; ++fails; }
+
+    if (auto res = cli.Post("/bulk_query", "{bad json", "application/json")) {
+        fails += !expect(res->status == 400, "POST /bulk_query malformed JSON should return 400");
+        auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.value("reason", "").find("parse") != std::string::npos, "Bulk query malformed JSON should include parse reason");
+    } else { std::cerr << "POST /bulk_query malformed failed\n"; ++fails; }
 
     // 6) DELETE /delete_key/:key remove from cache -> 204
     if (auto res = cli.Delete("/delete_key/1")) {
@@ -140,6 +157,8 @@ int main() {
     // delete missing -> 404
     if (auto res = cli.Delete("/delete_key/9999")) {
         fails += !expect(res->status == 404, "DELETE missing key should return 404");
+        auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.value("reason", "").find("not present") != std::string::npos, "Delete missing key should include reason");
     } else { std::cerr << "DELETE missing failed\n"; ++fails; }
 
     // 7) PUT /update_key/:key/:value (reinserting first) -> 200
@@ -156,13 +175,21 @@ int main() {
     // update missing -> 404
     if (auto res = cli.Put("/update_key/4242/x", "", "application/json")) {
         fails += !expect(res->status == 404, "PUT missing key should return 404");
+        auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.value("reason", "").find("not present") != std::string::npos, "Update missing key should include reason");
     } else { std::cerr << "PUT missing key failed\n"; ++fails; }
     if (auto res = cli.Put("/update_key/notnum/x", "", "application/json")) {
         fails += !expect(res->status == 400, "PUT invalid key should return 400");
+    auto body = nlohmann::json::parse(res->body);
+    fails += !expect(body.contains("reason"), "Update invalid key should include reason");
     } else { std::cerr << "PUT invalid key failed\n"; ++fails; }
 
     if (auto res = cli.Delete("/delete_key/notnum")) {
         fails += !expect(res->status == 400, "DELETE invalid key should return 400");
+        {
+            auto body = nlohmann::json::parse(res->body);
+            fails += !expect(body.contains("reason"), "DELETE invalid key should include reason in response");
+        }
     } else { std::cerr << "DELETE invalid key failed\n"; ++fails; }
 
     // 8) 404 route (unknown)

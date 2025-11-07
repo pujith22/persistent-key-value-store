@@ -1,6 +1,5 @@
 -- SQL init script for persistent key-value store
 -- Creates table, inserts test rows, and selects them for verification
-
 CREATE TABLE IF NOT EXISTS kv_store (
     key integer PRIMARY KEY,
     value text NOT NULL,

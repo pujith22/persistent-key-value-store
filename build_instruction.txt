@@ -55,3 +55,7 @@ g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test
 #  Updated Entry points output:
 #   GET /        -> JSON service catalog listing all routes
 #   GET /home    -> Styled HTML homepage with quick-start details (we can edit assets/home.html to tweak layout)
+
+# final build command for server with persistence library
+
+g++ -std=c++17 server.cpp main_server.cpp persistence_adapter.cpp -I include -I third_party -I"$(pg_config --includedir)" -L"$(pg_config --libdir)" -lpq -o kv_server.out

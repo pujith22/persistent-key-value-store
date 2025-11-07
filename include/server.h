@@ -6,6 +6,8 @@
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include "inline_cache.h"
+#include "config.h"
+#include "persistence_adapter.h"
 
 // KeyValueServer: wraps httplib::Server providing route setup and lifecycle control.
 // Responsibility:
@@ -71,10 +73,16 @@ private:
     void logResponse(const httplib::Response& res, std::chrono::steady_clock::duration duration);
 
     // Helpers
-    static void json_response(httplib::Response& res, int status, const nlohmann::json& j);
+    static void json_response(httplib::Response& res, int status, const nlohmann::json& j, const char* reason = nullptr);
     static bool parse_int(const std::string& s, int& out);
 
     // logging mode flag
     bool json_logging_enabled{false};
     std::chrono::steady_clock::time_point server_boot_time{};
+    // optional persistence adapter (connected lazily at start())
+
+    std::unique_ptr<PersistenceAdapter> persistence_adapter;
+
+    // cached DB connection status message
+    std::string db_connection_status;
 };
