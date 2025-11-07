@@ -1,14 +1,13 @@
 # Persistent Key-Value Store
 
-A high-performance, persistent key-value store implemented in C++ with support for multiple database backends and REST API over HTTPS.
+A high-performance, persistent key-value store implemented in C++ with support and REST API over HTTP.
 
 ## Features
 
-- **Multiple Persistence Backends**
-  - MongoDB (default)
+- **Persistence Backend**
   - PostgreSQL
   - In-Memory (for testing/development)
-- **REST API over HTTPS** - Secure communication with SSL/TLS
+- **REST API over HTTP** - (Will be upgraded later to HTTPS for Secure communication with SSL/TLS)
 - **In-Memory Caching** - Fast access with write-through cache
 - **Thread-Safe Operations** - Concurrent request handling
 - **Integer Keys & String Values** - Simple yet extensible data model
@@ -37,11 +36,13 @@ A high-performance, persistent key-value store implemented in C++ with support f
 └──────┬──────────┘
        │
 ┌──────▼──────────┐
-│ MongoDB/PostgreSQL │
+│    PostgreSQL   │
 └─────────────────┘
 ```
 
-## Contributing
+## Contributions
+
+Author: Pujith Sai Kumar Korlepara (@pujith22)
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
