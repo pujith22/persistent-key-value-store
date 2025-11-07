@@ -321,6 +321,18 @@ int main() {
         fails += !expect(body.contains("summary"), "Bulk query response should include summary");
     } else { std::cerr << "PATCH /bulk_query payload failed\n"; ++fails; }
 
+    // Scenario matching user-reported payload to guard against regressions / crashes
+    const char* robustness_payload = R"({"data":[250,10,350,1,100,"invalid type",22,2]})";
+    if (auto res = cli.Patch("/bulk_query", robustness_payload, "application/json")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query should return 200 for robustness payload");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("success", false) == true, "Robustness payload should report success true");
+        fails += !expect(body.contains("results") && body["results"].is_array() && body["results"].size() == 8, "Robustness payload should return eight results");
+        auto summary = body.value("summary", nlohmann::json::object());
+        fails += !expect(summary.value("requested", 0) == 8, "Summary should note eight requested keys");
+        fails += !expect(summary.value("type_mismatch", 0) == 1, "Summary should capture one type mismatch");
+    } else { std::cerr << "PATCH /bulk_query robustness payload failed\n"; ++fails; }
+
     // invalid bulk_update payload -> 200 with errors
     if (auto res = cli.Post("/bulk_update", "{\"bad\":1}", "application/json")) {
         fails += !expect(res->status == 200, "Invalid bulk_update payload should still return 200");
