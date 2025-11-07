@@ -172,13 +172,13 @@ private:
 
     static std::chrono::steady_clock::time_point now() { return std::chrono::steady_clock::now(); }
 
-    void touchLRU(const std::list<int>::iterator& itKey) {
+    void touchLRU(std::list<int>::iterator& itKey) {
         std::lock_guard<std::mutex> lock(lruMutex_);
         // move key to front if not already
         if (itKey != lruList_.begin()) {
             int k = *itKey;
             lruList_.erase(itKey);
-            lruList_.push_front(k);
+            itKey = lruList_.insert(lruList_.begin(), k);
         }
     }
 

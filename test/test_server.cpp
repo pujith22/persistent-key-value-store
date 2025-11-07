@@ -185,12 +185,24 @@ int main() {
     } else { std::cerr << "GET /get_key/222 second attempt failed\n"; ++fails; }
     fails += !expect(fake->getCallCount() >= 1, "Persistence get should be called at least once for read-through");
 
-    // 3) POST /bulk_query (empty body -> JSON info)
-    if (auto res = cli.Post("/bulk_query")) {
-        fails += !expect(res->status == 200, "POST /bulk_query should return 200");
+    // 3) PATCH /bulk_query (empty body -> JSON errors but HTTP 200)
+    if (auto res = cli.Patch("/bulk_query")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query should return 200 even for empty body");
         fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "bulk_query should be JSON");
-        fails += !expect(res->body.find("\"endpoint\":\"bulk_query\"") != std::string::npos, "Bulk query JSON should include endpoint");
-    } else { std::cerr << "POST /bulk_query failed\n"; ++fails; }
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("endpoint") && body["endpoint"]=="bulk_query", "Bulk query JSON should include endpoint");
+        fails += !expect(body.contains("results") && body["results"].is_array() && body["results"].empty(), "Empty body bulk query should return empty results array");
+        bool sawEmptyError = false;
+        if (body.contains("errors") && body["errors"].is_array()) {
+            for (const auto& err : body["errors"]) {
+                if (err.value("code", std::string()) == "empty_body") {
+                    sawEmptyError = true;
+                    break;
+                }
+            }
+        }
+        fails += !expect(sawEmptyError, "Empty body bulk query should report empty_body error");
+    } else { std::cerr << "PATCH /bulk_query failed\n"; ++fails; }
 
     // 4) POST /insert/:key/:value -> 201 JSON
     if (auto res = cli.Post("/insert/1/abc", "", "application/json")) {
@@ -221,51 +233,154 @@ int main() {
     fails += !expect(body.value("reason", "").find("exists") != std::string::npos, "Conflict response should include reason");
     } else { std::cerr << "POST /insert conflict failed\n"; ++fails; }
 
-    // 5) PATCH /bulk_update (echo body JSON)
-    // 5) PATCH /bulk_update with ops array
-    const char* patch_array = "[{\"op\":\"update_or_insert\",\"key\":1,\"value\":\"abc\"}]";
-    if (auto res = cli.Patch("/bulk_update", patch_array, "application/json")) {
-        fails += !expect(res->status == 200, "PATCH /bulk_update should return 200");
+    // 5) POST /bulk_update accepts transactional operations
+    const char* patch_payload = R"({"operations":[{"operation":"insert","key":777,"value":"txn-ins"},{"operation":"get","key":777},{"operation":"update","key":777,"value":"txn-upd"},{"operation":"delete","key":777}]})";
+    if (auto res = cli.Post("/bulk_update", patch_payload, "application/json")) {
+        fails += !expect(res->status == 200, "POST /bulk_update should return 200");
         auto body = nlohmann::json::parse(res->body);
-        fails += !expect(body.contains("results"), "bulk_update should produce results array");
-    } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
-    // Bulk query should retrieve mixed cache/persistence values
-    if (auto res = cli.Post("/bulk_query", "[222,333,444]", "application/json")) {
-        fails += !expect(res->status == 200, "POST /bulk_query array should return 200");
+        fails += !expect(body.value("success", false) == true, "Successful bulk_update should report success true");
+    auto mode = body.value("transaction_mode", std::string());
+    bool tx_mode_ok = (mode == "rollback" || mode == "emulated");
+    fails += !expect(tx_mode_ok, "Successful bulk_update should report transactional mode");
+        fails += !expect(body.contains("summary") && body["summary"].value("succeeded", 0) == 4, "Summary should report four successful operations");
+        fails += !expect(body.contains("results") && body["results"].is_array() && body["results"].size() == 4, "Results array should list each operation");
+        auto& txn_results = body["results"];
+        fails += !expect(txn_results[1].value("operation", "") == "get", "Second result should represent get operation");
+        fails += !expect(txn_results[1].contains("value") && txn_results[1]["value"] == "txn-ins", "Get operation should include retrieved value");
+        fails += !expect(txn_results[3].value("operation", "") == "delete", "Fourth result should represent delete operation");
+    } else { std::cerr << "POST /bulk_update failed\n"; ++fails; }
+    if (auto res = cli.Get("/get_key/777")) {
+        fails += !expect(res->status == 404, "Key 777 should be deleted after transactional bulk_update");
+    } else { std::cerr << "GET /get_key/777 failed\n"; ++fails; }
+
+    // Transaction should roll back on failure
+    const char* patch_failure = R"({"operations":[{"operation":"insert","key":888,"value":"should-rollback"},{"operation":"update","key":9999,"value":"fails"},{"operation":"delete","key":888}]})";
+    if (auto res = cli.Post("/bulk_update", patch_failure, "application/json")) {
+        fails += !expect(res->status == 200, "POST /bulk_update failure should still return 200");
         auto body = nlohmann::json::parse(res->body);
-        fails += !expect(body.contains("results"), "Bulk query results should be present");
-        bool saw333 = false;
+        fails += !expect(body.value("success", true) == false, "Failed bulk_update should report success false");
+        fails += !expect(body.contains("results") && body["results"].is_array() && body["results"].size() == 2, "Rollback response should include processed operations only");
+        fails += !expect(body.contains("summary") && body["summary"].value("aborted", 0) == 1, "Summary should report one aborted operation");
+        bool sawFailure = false;
         for (const auto& item : body["results"]) {
-            if (!item.is_object()) continue;
-            if (item.value("key", 0) == 333) {
-                saw333 = true;
-                fails += !expect(item.value("found", false) == true, "Key 333 should be found via persistence");
-                fails += !expect(item.value("value", "") == "bulk-db", "Key 333 should return persistence value");
-                fails += !expect(item.value("source", "") == "persistence", "Key 333 should indicate persistence source");
+            if (item.value("status", "") == "failed") {
+                sawFailure = true;
+                fails += !expect(item.contains("error"), "Failed result should include error");
             }
         }
-        fails += !expect(saw333, "Bulk query should include key 333 entry");
-    } else { std::cerr << "POST /bulk_query array failed\n"; ++fails; }
-
-    // invalid bulk_update payload -> 400
-    if (auto res = cli.Patch("/bulk_update", "{\"bad\":1}", "application/json")) {
-        fails += !expect(res->status == 400, "PATCH /bulk_update invalid payload should return 400");
+        fails += !expect(sawFailure, "Rollback response should include failing operation details");
+    } else { std::cerr << "POST /bulk_update rollback failed\n"; ++fails; }
+    if (auto res = cli.Get("/get_key/888")) {
+        fails += !expect(res->status == 404, "Failed transaction should roll back inserted key 888");
+    } else { std::cerr << "GET /get_key/888 failed\n"; ++fails; }
+    // Bulk query should accept object payload with data array and provide verbose results
+    const char* bulk_payload = "{\"data\":[222,333,\"oops\",444]}";
+    if (auto res = cli.Patch("/bulk_query", bulk_payload, "application/json")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query should return 200 for valid payload");
         auto body = nlohmann::json::parse(res->body);
-    fails += !expect(body.value("reason", "").find("array") != std::string::npos, "Bulk update invalid payload should include reason");
-    } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
+        fails += !expect(body.contains("results") && body["results"].is_array(), "Bulk query should include results array");
+        fails += !expect(body["results"].size() == 4, "Bulk query should report one entry per requested key");
+    bool noTopErrors = !body.contains("errors") || (body["errors"].is_array() && body["errors"].empty());
+    fails += !expect(noTopErrors, "Valid bulk query should have no top-level errors");
 
-    // invalid bulk query payload -> 400
-    if (auto res = cli.Post("/bulk_query", "{\"unexpected\":true}", "application/json")) {
-        fails += !expect(res->status == 400, "POST /bulk_query invalid payload should return 400");
-        auto body = nlohmann::json::parse(res->body);
-    fails += !expect(body.value("reason", "").find("array") != std::string::npos, "Bulk query invalid payload should indicate array expectation");
-    } else { std::cerr << "POST /bulk_query invalid failed\n"; ++fails; }
+        auto find_result = [&](auto predicate) -> nlohmann::json {
+            for (const auto& item : body["results"]) {
+                if (item.is_object() && predicate(item)) return item;
+            }
+            return nlohmann::json();
+        };
 
-    if (auto res = cli.Post("/bulk_query", "{bad json", "application/json")) {
-        fails += !expect(res->status == 400, "POST /bulk_query malformed JSON should return 400");
+        auto r222 = find_result([&](const nlohmann::json& item){ return item.value("key", 0) == 222; });
+        fails += !expect(!r222.is_null(), "Bulk query should include entry for key 222");
+        if (!r222.is_null()) {
+            fails += !expect(r222.value("status", "") == "hit_cache", "Key 222 should be served from cache");
+            fails += !expect(r222.value("found", false) == true, "Key 222 should be marked found");
+        }
+
+        auto r333 = find_result([&](const nlohmann::json& item){ return item.value("key", 0) == 333; });
+        fails += !expect(!r333.is_null(), "Bulk query should include entry for key 333");
+        if (!r333.is_null()) {
+            fails += !expect(r333.value("status", "") == "hit_persistence", "Key 333 should be hydrated from persistence");
+            fails += !expect(r333.value("value", "") == "bulk-db", "Key 333 should return persistence value");
+            fails += !expect(r333.value("source", "") == "persistence", "Key 333 should indicate persistence source");
+        }
+
+        auto rTypeMismatch = find_result([&](const nlohmann::json& item){ return item.value("status", "") == "type_mismatch"; });
+        fails += !expect(!rTypeMismatch.is_null(), "Bulk query should include type mismatch entry");
+        if (!rTypeMismatch.is_null()) {
+            fails += !expect(rTypeMismatch.value("reason", std::string()).find("integer") != std::string::npos, "Type mismatch entry should explain integer expectation");
+        }
+
+        auto r444 = find_result([&](const nlohmann::json& item){ return item.value("key", 0) == 444; });
+        fails += !expect(!r444.is_null(), "Bulk query should include entry for key 444");
+        if (!r444.is_null()) {
+            fails += !expect(r444.value("status", "") == "miss", "Key 444 should be reported as miss");
+            fails += !expect(r444.value("reason", std::string()).find("not present") != std::string::npos, "Miss entry should explain absence");
+        }
+
+        fails += !expect(body.contains("summary"), "Bulk query response should include summary");
+    } else { std::cerr << "PATCH /bulk_query payload failed\n"; ++fails; }
+
+    // Scenario matching user-reported payload to guard against regressions / crashes
+    const char* robustness_payload = R"({"data":[250,10,350,1,100,"invalid type",22,2]})";
+    if (auto res = cli.Patch("/bulk_query", robustness_payload, "application/json")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query should return 200 for robustness payload");
         auto body = nlohmann::json::parse(res->body);
-    fails += !expect(body.value("reason", "").find("parse") != std::string::npos, "Bulk query malformed JSON should include parse reason");
-    } else { std::cerr << "POST /bulk_query malformed failed\n"; ++fails; }
+        fails += !expect(body.value("success", false) == true, "Robustness payload should report success true");
+        fails += !expect(body.contains("results") && body["results"].is_array() && body["results"].size() == 8, "Robustness payload should return eight results");
+        auto summary = body.value("summary", nlohmann::json::object());
+        fails += !expect(summary.value("requested", 0) == 8, "Summary should note eight requested keys");
+        fails += !expect(summary.value("type_mismatch", 0) == 1, "Summary should capture one type mismatch");
+    } else { std::cerr << "PATCH /bulk_query robustness payload failed\n"; ++fails; }
+
+    // invalid bulk_update payload -> 200 with errors
+    if (auto res = cli.Post("/bulk_update", "{\"bad\":1}", "application/json")) {
+        fails += !expect(res->status == 200, "Invalid bulk_update payload should still return 200");
+        auto body = nlohmann::json::parse(res->body);
+        bool sawMissingOps = false;
+        if (body.contains("errors") && body["errors"].is_array()) {
+            for (const auto& err : body["errors"]) {
+                if (err.value("code", std::string()) == "missing_operations") {
+                    sawMissingOps = true;
+                    break;
+                }
+            }
+        }
+        fails += !expect(sawMissingOps, "Invalid payload should report missing_operations error");
+        fails += !expect(body.value("success", true) == false, "Invalid payload should mark success false");
+    } else { std::cerr << "POST /bulk_update failed\n"; ++fails; }
+
+    // invalid bulk query payload -> still 200 with error description
+    if (auto res = cli.Patch("/bulk_query", "{\"unexpected\":true}", "application/json")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query invalid payload should still return 200");
+        auto body = nlohmann::json::parse(res->body);
+        bool sawMissing = false;
+        if (body.contains("errors")) {
+            for (const auto& err : body["errors"]) {
+                if (err.value("code", std::string()) == "missing_data") {
+                    sawMissing = true;
+                    break;
+                }
+            }
+        }
+        fails += !expect(sawMissing, "Invalid payload should report missing_data error");
+    } else { std::cerr << "PATCH /bulk_query invalid failed\n"; ++fails; }
+
+    if (auto res = cli.Patch("/bulk_query", "{bad json", "application/json")) {
+        fails += !expect(res->status == 200, "PATCH /bulk_query malformed JSON should still return 200");
+        auto body = nlohmann::json::parse(res->body);
+        bool sawParse = false;
+        if (body.contains("errors")) {
+            for (const auto& err : body["errors"]) {
+                if (err.value("code", std::string()) == "parse_error") {
+                    sawParse = true;
+                    fails += !expect(err.value("reason", std::string()).find("failed to parse") != std::string::npos, "Parse error reason should be descriptive");
+                    break;
+                }
+            }
+        }
+        fails += !expect(sawParse, "Malformed JSON should be captured as parse_error");
+    } else { std::cerr << "PATCH /bulk_query malformed failed\n"; ++fails; }
 
     // 6) DELETE /delete_key/:key remove from cache -> 204
     if (auto res = cli.Delete("/delete_key/1")) {

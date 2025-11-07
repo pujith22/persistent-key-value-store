@@ -1,2 +1,5 @@
 # include all libraries needed for successful compilation
 g++ test/test_server.cpp -I third_party -I include server.cpp -o test_server.out
+
+# Test harnesses inject a fake persistence provider before calling start(), so
+# no PostgreSQL client or adapter linkage is required for this build.
