@@ -1,0 +1,3 @@
+# to migrate database schema, you may use the following commands
+
+psql -U pujith22 -d kvstore -f ./sql/init_kv.sql
