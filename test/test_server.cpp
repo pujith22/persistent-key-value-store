@@ -1,5 +1,6 @@
 #include "server.h"
 #include <httplib.h>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -59,8 +60,15 @@ int main() {
     if (auto res = cli.Get("/get_key/123")) {
         fails += !expect(res->status == 404, "GET /get_key/123 should return 404 for missing key");
         fails += !expect(res->get_header_value("Content-Type").find("application/json") != std::string::npos, "get_key should be JSON");
-        fails += !expect(res->body.find("\"found\":false") != std::string::npos, "JSON should indicate found:false");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("found", true) == false, "JSON should indicate found:false");
     } else { std::cerr << "GET /get_key failed\n"; ++fails; }
+    // invalid key format -> 400
+    if (auto res = cli.Get("/get_key/not-a-number")) {
+        fails += !expect(res->status == 400, "GET invalid key should return 400");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("error", "") == "invalid key format", "Invalid key error message");
+    } else { std::cerr << "GET /get_key invalid failed\n"; ++fails; }
 
     // 3) POST /bulk_query (empty body -> JSON info)
     if (auto res = cli.Post("/bulk_query")) {
@@ -72,22 +80,43 @@ int main() {
     // 4) POST /insert/:key/:value -> 201 JSON
     if (auto res = cli.Post("/insert/1/abc", "", "application/json")) {
         fails += !expect(res->status == 201, "POST /insert should return 201 on create");
-        fails += !expect(res->body.find("\"created\":true") != std::string::npos, "Insert JSON should mark created");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("created", false) == true, "Insert JSON should mark created");
     } else { std::cerr << "POST /insert failed\n"; ++fails; }
+    if (auto res = cli.Post("/insert/notnum/abc", "", "application/json")) {
+        fails += !expect(res->status == 400, "POST invalid key should return 400");
+    } else { std::cerr << "POST /insert invalid failed\n"; ++fails; }
     // verify cache hit now returns 200 with found:true
     if (auto res = cli.Get("/get_key/1")) {
         fails += !expect(res->status == 200, "GET /get_key/1 should return 200 for existing key");
-        fails += !expect(res->body.find("\"found\":true") != std::string::npos, "GET /get_key/1 JSON found:true");
-        fails += !expect(res->body.find("\"value\":\"abc\"") != std::string::npos, "GET /get_key/1 should include value 'abc'");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("found", false) == true, "GET /get_key/1 JSON found:true");
+        fails += !expect(body.value("value", "") == "abc", "GET /get_key/1 should include value 'abc'");
     } else { std::cerr << "GET /get_key/1 failed\n"; ++fails; }
+    // conflict insert -> 409
+    if (auto res = cli.Post("/insert/1/duplicate", "", "application/json")) {
+        fails += !expect(res->status == 409, "POST /insert existing should return 409");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("existing_value"), "Conflict response should include existing_value");
+    } else { std::cerr << "POST /insert conflict failed\n"; ++fails; }
 
     // 5) PATCH /bulk_update (echo body JSON)
     // 5) PATCH /bulk_update with ops array
-    const char* patch_array = "[{\"op\":\"upsert\",\"key\":1,\"value\":\"abc\"}]";
+    const char* patch_array = "[{\"op\":\"update_or_insert\",\"key\":1,\"value\":\"abc\"}]";
     if (auto res = cli.Patch("/bulk_update", patch_array, "application/json")) {
         fails += !expect(res->status == 200, "PATCH /bulk_update should return 200");
-        fails += !expect(res->body.find("\"results\"") != std::string::npos, "bulk_update should produce results array");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("results"), "bulk_update should produce results array");
     } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
+    // invalid bulk_update payload -> 400
+    if (auto res = cli.Patch("/bulk_update", "{\"bad\":1}", "application/json")) {
+        fails += !expect(res->status == 400, "PATCH /bulk_update invalid payload should return 400");
+    } else { std::cerr << "PATCH /bulk_update failed\n"; ++fails; }
+
+    // invalid bulk query payload -> 400
+    if (auto res = cli.Post("/bulk_query", "{\"unexpected\":true}", "application/json")) {
+        fails += !expect(res->status == 400, "POST /bulk_query invalid payload should return 400");
+    } else { std::cerr << "POST /bulk_query invalid failed\n"; ++fails; }
 
     // 6) DELETE /delete_key/:key remove from cache -> 204
     if (auto res = cli.Delete("/delete_key/1")) {
@@ -96,24 +125,62 @@ int main() {
     if (auto res = cli.Get("/get_key/1")) {
         fails += !expect(res->status == 404, "GET /get_key/1 should return 404 after deletion");
     } else { std::cerr << "GET /get_key/1 after delete failed\n"; ++fails; }
+    // delete missing -> 404
+    if (auto res = cli.Delete("/delete_key/9999")) {
+        fails += !expect(res->status == 404, "DELETE missing key should return 404");
+    } else { std::cerr << "DELETE missing failed\n"; ++fails; }
 
     // 7) PUT /update_key/:key/:value (reinserting first) -> 200
     if (auto res = cli.Post("/insert/1/abc", "", "application/json")) { /* created */ }
     if (auto res = cli.Put("/update_key/1/new", "", "application/json")) {
         fails += !expect(res->status == 200, "PUT /update_key should return 200 on success");
-        fails += !expect(res->body.find("\"updated\":true") != std::string::npos, "Update JSON should mark updated");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("updated", false) == true, "Update JSON should mark updated");
     } else { std::cerr << "PUT /update_key failed\n"; ++fails; }
     if (auto res = cli.Get("/get_key/1")) {
-        fails += !expect(res->body.find("\"value\":\"new\"") != std::string::npos, "GET /get_key/1 should show updated value new");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("value", "") == "new", "GET /get_key/1 should show updated value new");
     } else { std::cerr << "GET /get_key/1 after update failed\n"; ++fails; }
+    // update missing -> 404
+    if (auto res = cli.Put("/update_key/4242/x", "", "application/json")) {
+        fails += !expect(res->status == 404, "PUT missing key should return 404");
+    } else { std::cerr << "PUT missing key failed\n"; ++fails; }
+    if (auto res = cli.Put("/update_key/notnum/x", "", "application/json")) {
+        fails += !expect(res->status == 400, "PUT invalid key should return 400");
+    } else { std::cerr << "PUT invalid key failed\n"; ++fails; }
+
+    if (auto res = cli.Delete("/delete_key/notnum")) {
+        fails += !expect(res->status == 400, "DELETE invalid key should return 400");
+    } else { std::cerr << "DELETE invalid key failed\n"; ++fails; }
 
     // 8) 404 route (unknown)
     if (auto res = cli.Get("/no_such_route")) {
         fails += !expect(res->status == 404, "Unknown route should return 404");
     } else { std::cerr << "GET unknown route failed to connect\n"; ++fails; }
 
-    // 9) Stop endpoint should stop the server, subsequent requests fail
-    if (auto res = cli.Get("/stop")) { std::this_thread::sleep_for(100ms); }
+    // 9) Health & metrics endpoints
+    if (auto res = cli.Get("/health")) {
+        fails += !expect(res->status == 200, "/health should return 200");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("status", "") == "ok", "/health status should be ok");
+        fails += !expect(body.value("uptime_ms", 0) >= 0, "/health uptime should be non-negative");
+    } else { std::cerr << "GET /health failed\n"; ++fails; }
+
+    if (auto res = cli.Get("/metrics")) {
+        fails += !expect(res->status == 200, "/metrics should return 200");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.contains("entries"), "/metrics should include entries");
+        fails += !expect(body.contains("hits"), "/metrics should include hits");
+        fails += !expect(body.contains("misses"), "/metrics should include misses");
+    } else { std::cerr << "GET /metrics failed\n"; ++fails; }
+
+    // 10) Stop endpoint should stop the server, subsequent requests fail
+    if (auto res = cli.Get("/stop")) {
+        fails += !expect(res->status == 200, "/stop should return 200");
+        auto body = nlohmann::json::parse(res->body);
+        fails += !expect(body.value("stopping", false) == true, "/stop body should indicate stopping");
+        std::this_thread::sleep_for(100ms);
+    }
 
     // After stop, expect connection failure
     {

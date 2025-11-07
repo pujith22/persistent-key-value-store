@@ -21,7 +21,7 @@
     - Timestamps stored (steady_clock) for potential time-based heuristics (currently used for FIFO tie-breaking consistency).
     - Memory accounting is approximate: key sizeof(int) + value.size() + entry struct overhead.
     - When memory exceeds budget, evict one entry according to selected policy; repeat until under budget.
-    - Public API uses upsert semantics for insert/put.
+    - Public API uses update_or_insert semantics for insert/put.
     - Thread safe via per-bucket mutex; LRU list modifications also protected by its own mutex.
       (Coarse improvement: we avoid a global lock for all operations except usage list updates.)
 
@@ -64,7 +64,7 @@ public:
     }
 
     // Insert or update value; returns true if inserted new, false if updated existing.
-    bool upsert(int key, const std::string& value) {
+    bool update_or_insert(int key, const std::string& value) {
         auto& bucket = bucketFor(key);
         std::lock_guard<std::mutex> lg(bucket.mtx);
         for (auto it = bucket.entries.begin(); it != bucket.entries.end(); ++it) {

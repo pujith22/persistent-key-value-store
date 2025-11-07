@@ -13,7 +13,7 @@ static bool expect(bool cond, const char* msg) {
 // Helper: estimate bytes for one entry storing given value (approximate internal accounting)
 static size_t estimate_entry_bytes(const std::string& value) {
     InlineCache tmp{InlineCache::Policy::LRU, 10 * 1024 * 1024};
-    tmp.upsert(1, value);
+    tmp.update_or_insert(1, value);
     auto st = tmp.stats();
     return st.bytes_estimated;
 }
@@ -45,11 +45,11 @@ int main() {
         size_t per = estimate_entry_bytes(val);
         // capacity for 2 entries (approx), allow small margin
         InlineCache cache{InlineCache::Policy::LRU, per * 2 + 16};
-        cache.upsert(1, val);
-        cache.upsert(2, val);
+        cache.update_or_insert(1, val);
+        cache.update_or_insert(2, val);
         // Touch key 1 to make it MRU so key 2 becomes LRU
         (void)cache.get(1);
-        cache.upsert(3, val); // triggers eviction of key 2 if eviction happens
+        cache.update_or_insert(3, val); // triggers eviction of key 2 if eviction happens
         // We cannot guarantee exact eviction count, but LRU victim should be the least-recently-used
         auto v1 = cache.get(1);
         auto v2 = cache.get(2);
@@ -68,9 +68,9 @@ int main() {
         std::string val = "y";
         size_t per = estimate_entry_bytes(val);
         InlineCache cache{InlineCache::Policy::FIFO, per * 2 + 16};
-        cache.upsert(11, val); // first inserted
-        cache.upsert(12, val);
-        cache.upsert(13, val); // should evict 11 under FIFO if over budget
+        cache.update_or_insert(11, val); // first inserted
+        cache.update_or_insert(12, val);
+        cache.update_or_insert(13, val); // should evict 11 under FIFO if over budget
         auto v11 = cache.get(11);
         auto v12 = cache.get(12);
         auto v13 = cache.get(13);
@@ -88,7 +88,7 @@ int main() {
         std::string val(32, 'z');
         size_t per = estimate_entry_bytes(val);
         InlineCache cache{InlineCache::Policy::Random, per * 4 + 16}; // ~4 entries capacity
-        for (int k = 100; k < 120; ++k) cache.upsert(k, val);
+        for (int k = 100; k < 120; ++k) cache.update_or_insert(k, val);
         auto st = cache.stats();
         failures += !expect(st.evictions > 0, "Random: expected at least one eviction when over budget");
         // After evictions, should not exceed budget
@@ -99,7 +99,7 @@ int main() {
     {
         InlineCache cache{InlineCache::Policy::LRU};
         auto worker = [&cache](int start){
-            for (int i = 0; i < 100; ++i) cache.upsert(start + i, std::to_string(start + i));
+            for (int i = 0; i < 100; ++i) cache.update_or_insert(start + i, std::to_string(start + i));
         };
         std::thread t1(worker, 0);
         std::thread t2(worker, 1000);

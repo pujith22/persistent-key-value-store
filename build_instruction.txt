@@ -45,3 +45,10 @@ g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test
 # ./kv_server.out --policy=lru
 # ./kv_server.out --policy=fifo
 # ./kv_server.out --policy=random
+
+# enable structured JSON logging for observability:
+# ./kv_server.out --json-logs
+
+#  New endpoints for observability endpoints:
+#   GET /health   -> {"status":"ok","uptime_ms":...}
+#   GET /metrics  -> {"entries":n,"hits":n,"misses":n,"evictions":n}

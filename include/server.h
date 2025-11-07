@@ -3,6 +3,7 @@
 #include <string>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include "inline_cache.h"
 
 // KeyValueServer: wraps httplib::Server providing route setup and lifecycle control.
@@ -19,8 +20,7 @@
 //
 class KeyValueServer {
 public:
-    KeyValueServer(const std::string& host, int port);
-    KeyValueServer(const std::string& host, int port, InlineCache::Policy policy);
+    KeyValueServer(const std::string& host, int port, InlineCache::Policy = InlineCache::Policy::LRU,  bool jsonLogging = false);
     ~KeyValueServer();
 
     // Register all routes on the underlying server instance.
@@ -39,7 +39,7 @@ private:
     std::string host_;
     int port_{};
     httplib::Server server_;
-    InlineCache cache_;
+    InlineCache inline_cache;
 
     // Static HTML response for home page.
     static const std::string kHomePageHtml;
@@ -52,12 +52,19 @@ private:
     void bulkUpdateHandler(const httplib::Request& req, httplib::Response& res);
     void deletionHandler(const httplib::Request& req, httplib::Response& res);
     void updationHandler(const httplib::Request& req, httplib::Response& res);
+    void healthHandler(const httplib::Request& req, httplib::Response& res);
+    void metricsHandler(const httplib::Request& req, httplib::Response& res);
+    void stopHandler(const httplib::Request& req, httplib::Response& res);
 
     // Logging helpers
     void logRequest(const httplib::Request& req);
-    void logResponse(const httplib::Response& res);
+    void logResponse(const httplib::Response& res, std::chrono::steady_clock::duration duration);
 
     // Helpers
     static void json_response(httplib::Response& res, int status, const nlohmann::json& j);
     static bool parse_int(const std::string& s, int& out);
+
+    // logging mode flag
+    bool json_logging_enabled{false};
+    std::chrono::steady_clock::time_point server_boot_time{};
 };
