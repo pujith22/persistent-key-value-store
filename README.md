@@ -99,7 +99,7 @@ The test suite validates transactional semantics (including rollback on the firs
 
 | Name | Institute | Email | GitHub | LinkedIn | Portfolio |
 |------|-----------|-------|--------|----------|-----------|
-| Pujith Sai Kumar Korlepara | IIT Bombay (ID: 25M0787) | pujith@cse.iitb.ac.in / pujith22.sde@gmail.com | [Profile](https://github.com/pujith22) | [Profile](https://www.linkedin.com/in/pujith22) | [Portfolio](https://www.cse.iitb.ac.in/~pujith) |
+| Pujith Sai Kumar Korlepara | IIT Bombay (ID: 25M0787) | <pujith@cse.iitb.ac.in> / <pujith22.sde@gmail.com> | [Profile](https://github.com/pujith22) | [Profile](https://www.linkedin.com/in/pujith22) | [Portfolio](https://www.cse.iitb.ac.in/~pujith) |
 
 Additional contact: WhatsApp/Telegram +91 9996159269
 
