@@ -28,7 +28,8 @@ static bool parse_json_logging(int argc, char** argv) {
 int main(int argc, char** argv) {
     InlineCache::Policy policy = parse_policy(argc, argv);
     bool enable_json_logging = parse_json_logging(argc, argv);
-    KeyValueServer server{"localhost", 2222, policy, enable_json_logging};
+    // Listen on 0.0.0.0 to allow external access (e.g. from Docker host)
+    KeyValueServer server{"0.0.0.0", 2222, policy, enable_json_logging};
     server.setupRoutes();
     if (!server.start()) {
         return 1;

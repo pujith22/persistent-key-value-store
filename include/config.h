@@ -15,7 +15,12 @@
 
 inline std::string load_conninfo(const std::string &defaultValue = "dbname=kvstore") {
 
-    //  reeading from config/db.json (full-fledged JSON parsing via nlohmann/json)
+    // 1. Check environment variable
+    if (const char* env_p = std::getenv("PG_CONNINFO")) {
+        return std::string(env_p);
+    }
+
+    //  reading from config/db.json (full-fledged JSON parsing via nlohmann/json)
     try {
         std::ifstream in("config/db.json");
         if (in) {

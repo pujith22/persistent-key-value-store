@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  kv_server:
+    build: .
+    container_name: kv_server
+    ports:
+      - "2222:2222"
+    environment:
+      - PG_CONNINFO=host=postgres port=5432 dbname=kvstore user=postgres password=postgres
+    depends_on:
+      - postgres
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '8.0'
+          memory: 4096M
+    networks:
+      - kv_network
+
+  postgres:
+    image: postgres:15
+    container_name: kv_postgres
+    environment:
+      - POSTGRES_DB=kvstore
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./sql/init_kv.sql:/docker-entrypoint-initdb.d/init_kv.sql
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8GB
+    networks:
+      - kv_network
+
+networks:
+  kv_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
