@@ -90,6 +90,15 @@ g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test
 
 The test suite validates transactional semantics (including rollback on the first failure), bulk query robustness, and cache integration.
 
+## Stress Test
+
+Run the following command
+python3 stress_test.py [concurrency] [total_requests]
+
+Make sure you install dependencies in your python environment with help of following command before running the above command
+
+pip install -r requirements.txt
+
 ## Credits
 
 - [nlohmann/json](https://github.com/nlohmann/json) — Niels Lohmann
