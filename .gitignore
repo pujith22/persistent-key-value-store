@@ -68,3 +68,9 @@ pg_ident.conf.sample
 *.swp
 [Tt]humbs.db
 .DS_Store
+
+# Stat and temporary files
+*.csv
+*.html
+*.json
+*.png

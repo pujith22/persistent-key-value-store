@@ -7,20 +7,12 @@ import statistics
 import sys
 import threading
 import psutil
+import argparse
 from collections import defaultdict
+from urllib.parse import urlparse
 
 HOST = "localhost"
 PORT = 2222
-CONCURRENCY = 10
-TOTAL_REQUESTS = 1000
-
-# Endpoints derived from server.cpp
-# GET /get_key/:key_id
-# POST /insert/:key/:value
-# PUT /update_key/:key/:value
-# DELETE /delete_key/:key
-# POST /bulk_update (JSON)
-# PATCH /bulk_query (JSON)
 
 class SystemMonitor:
     def __init__(self, interval=0.5):
@@ -63,14 +55,16 @@ class SystemMonitor:
             time.sleep(self.interval)
 
 class StressTester:
-    def __init__(self, host, port, concurrency, total_requests):
+    def __init__(self, host, port, concurrency, total_requests, duration=None):
         self.host = host
         self.port = port
         self.concurrency = concurrency
         self.total_requests = total_requests
+        self.duration = duration
         self.results = defaultdict(list)
         self.errors = 0
         self.monitor = SystemMonitor(interval=0.2)
+        self.lock = threading.Lock()
 
     def make_request(self, method, path, body=None):
         start_time = time.time()
@@ -91,63 +85,89 @@ class StressTester:
             # print(f"Error: {e}")
             return "ERROR", 0, 0
 
+    def _generate_random_op(self):
+        op_type = random.choice(["read", "write", "update"])
+        key = random.randint(1, 50000)
+        val = f"value_{random.randint(1, 10000)}"
+        
+        if op_type == "read":
+            return "GET", f"/get_key/{key}", None
+        elif op_type == "write":
+            return "POST", f"/insert/{key}/{val}", None
+        elif op_type == "update":
+            return "PUT", f"/update_key/{key}/{val}_updated", None
+        elif op_type == "delete":
+            return "DELETE", f"/delete_key/{key}", None
+        elif op_type == "bulk_write":
+            ops = []
+            for _ in range(random.randint(1, 5)):
+                k = random.randint(1, 1000)
+                v = f"val_{k}"
+                b_op = random.choice(["insert", "update", "delete"])
+                op_entry = {"operation": b_op, "key": k}
+                if b_op != "delete":
+                    op_entry["value"] = v
+                ops.append(op_entry)
+            return "POST", "/bulk_update", {"operations": ops}
+        elif op_type == "bulk_read":
+            keys = [random.randint(1, 1000) for _ in range(random.randint(1, 5))]
+            return "PATCH", "/bulk_query", {"data": keys}
+        return "GET", f"/get_key/{key}", None
+
+    def _record_result(self, op, latency):
+        # Group by operation type
+        if "get_key" in op: op_key = "READ"
+        elif "insert" in op: op_key = "WRITE"
+        elif "update_key" in op: op_key = "UPDATE"
+        elif "delete_key" in op: op_key = "DELETE"
+        elif "bulk_update" in op: op_key = "BULK_WRITE"
+        elif "bulk_query" in op: op_key = "BULK_READ"
+        else: op_key = "OTHER"
+        
+        with self.lock:
+            self.results[op_key].append(latency)
+
     def run_load(self):
         print(f"Starting stress test on {self.host}:{self.port}")
-        print(f"Concurrency: {self.concurrency}, Total Requests: {self.total_requests}")
+        if self.duration:
+            print(f"Concurrency: {self.concurrency}, Duration: {self.duration} minutes")
+        else:
+            print(f"Concurrency: {self.concurrency}, Total Requests: {self.total_requests}")
         
         self.monitor.start()
         start_total = time.time()
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.concurrency) as executor:
             futures = []
-            for i in range(self.total_requests):
-                op_type = random.choice(["read", "write", "update", "delete", "bulk_read", "bulk_write"])
-                key = random.randint(1, 1000)
-                val = f"value_{random.randint(1, 1000)}"
+            
+            if self.duration:
+                end_time = start_total + (self.duration * 60)
                 
-                if op_type == "read":
-                    futures.append(executor.submit(self.make_request, "GET", f"/get_key/{key}"))
-                elif op_type == "write":
-                    futures.append(executor.submit(self.make_request, "POST", f"/insert/{key}/{val}"))
-                elif op_type == "update":
-                    futures.append(executor.submit(self.make_request, "PUT", f"/update_key/{key}/{val}_updated"))
-                elif op_type == "delete":
-                    futures.append(executor.submit(self.make_request, "DELETE", f"/delete_key/{key}"))
-                elif op_type == "bulk_write":
-                    ops = []
-                    for _ in range(random.randint(1, 5)):
-                        k = random.randint(1, 1000)
-                        v = f"val_{k}"
-                        # Randomly choose between insert, update, delete for bulk
-                        b_op = random.choice(["insert", "update", "delete"])
-                        op_entry = {"operation": b_op, "key": k}
-                        if b_op != "delete":
-                            op_entry["value"] = v
-                        ops.append(op_entry)
-                    
-                    body = {"operations": ops}
-                    futures.append(executor.submit(self.make_request, "POST", "/bulk_update", body))
-                elif op_type == "bulk_read":
-                    keys = [random.randint(1, 1000) for _ in range(random.randint(1, 5))]
-                    body = {"data": keys}
-                    futures.append(executor.submit(self.make_request, "PATCH", "/bulk_query", body))
+                def worker():
+                    while time.time() < end_time:
+                        method, path, body = self._generate_random_op()
+                        op, latency, status = self.make_request(method, path, body)
+                        if op == "ERROR" or status >= 500:
+                            with self.lock:
+                                self.errors += 1
+                        else:
+                            self._record_result(op, latency)
 
-            for future in concurrent.futures.as_completed(futures):
-                op, latency, status = future.result()
-                if op == "ERROR" or status >= 500:
-                    self.errors += 1
-                else:
-                    # Group by operation type (e.g., "GET get_key", "POST insert")
-                    # Simplify key for aggregation
-                    if "get_key" in op: op_key = "READ"
-                    elif "insert" in op: op_key = "WRITE"
-                    elif "update_key" in op: op_key = "UPDATE"
-                    elif "delete_key" in op: op_key = "DELETE"
-                    elif "bulk_update" in op: op_key = "BULK_WRITE"
-                    elif "bulk_query" in op: op_key = "BULK_READ"
-                    else: op_key = "OTHER"
-                    
-                    self.results[op_key].append(latency)
+                # Launch worker threads
+                worker_futures = [executor.submit(worker) for _ in range(self.concurrency)]
+                concurrent.futures.wait(worker_futures)
+                
+            else:
+                for i in range(self.total_requests):
+                    method, path, body = self._generate_random_op()
+                    futures.append(executor.submit(self.make_request, method, path, body))
+
+                for future in concurrent.futures.as_completed(futures):
+                    op, latency, status = future.result()
+                    if op == "ERROR" or status >= 500:
+                        self.errors += 1
+                    else:
+                        self._record_result(op, latency)
 
         self.monitor.stop()
         total_time = time.time() - start_total
@@ -179,6 +199,14 @@ class StressTester:
             print(f"Total Requests: {total_reqs}")
             print(f"Errors: {self.errors}")
             print(f"Throughput: {rps:.2f} req/s")
+            
+            # Save summary for benchmark suite
+            with open("last_run_summary.json", "w") as f:
+                json.dump({
+                    "concurrency": self.concurrency,
+                    "throughput": rps,
+                    "avg_latency": statistics.mean(all_latencies) if all_latencies else 0
+                }, f)
         else:
             print("No successful requests.")
         print("="*50)
@@ -195,34 +223,30 @@ class StressTester:
         if self.monitor.metrics:
             with open("system_metrics.csv", "w") as f:
                 f.write("timestamp,cpu_percent,memory_percent,disk_read_bytes,disk_write_bytes\n")
-                # Calculate deltas for disk bytes to get throughput
-                prev_read = self.monitor.metrics[0]['disk_read_bytes']
-                prev_write = self.monitor.metrics[0]['disk_write_bytes']
-                
                 for m in self.monitor.metrics:
-                    # For disk, we want rate, but raw bytes is fine for now, we can process in report
                     f.write(f"{m['timestamp']},{m['cpu_percent']},{m['memory_percent']},{m['disk_read_bytes']},{m['disk_write_bytes']}\n")
             print("System metrics saved to 'system_metrics.csv'")
 
 if __name__ == "__main__":
-    # Simple CLI args: python stress_test.py [concurrency] [requests]
-    concurrency = int(sys.argv[1]) if len(sys.argv) > 1 else 10
-    requests = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
+    parser = argparse.ArgumentParser(description='Stress Test for KV Store')
+    parser.add_argument('--concurrency', type=int, default=10, help='Number of concurrent threads')
+    parser.add_argument('--requests', type=int, default=1000, help='Total number of requests (ignored if duration is set)')
+    parser.add_argument('--duration', type=float, help='Duration of test in minutes')
+    parser.add_argument('host_url', nargs='?', default="http://localhost:2222", help='Target URL (e.g. http://localhost:2222)')
     
-    tester = StressTester(HOST, PORT, concurrency, requests)
+    args = parser.parse_args()
     
-    # Start system monitor in background
-    monitor = SystemMonitor(interval=1)
-    monitor.start()
+    parsed = urlparse(args.host_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 2222
+    
+    tester = StressTester(host, port, args.concurrency, args.requests, args.duration)
     
     tester.run_load()
-    
-    # Stop the monitor and print metrics
-    monitor.stop()
     
     print("\n" + "="*50)
     print("SYSTEM METRICS")
     print("="*50)
-    for metric in monitor.metrics:
+    for metric in tester.monitor.metrics:
         print(f"Time: {metric['timestamp']:.2f}s, CPU: {metric['cpu_percent']}%, Memory: {metric['memory_percent']}%, Disk Read: {metric['disk_read_bytes']} bytes, Disk Write: {metric['disk_write_bytes']} bytes")
     print("="*50)

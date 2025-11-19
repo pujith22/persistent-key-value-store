@@ -4,6 +4,7 @@
 #include <sstream>
 #include <libpq-fe.h>
 #include <vector>
+#include <mutex>
 #include "nlohmann/json.hpp"
 
 // Implementation of PersistenceAdapter using libpq (PostgreSQL C client)
@@ -11,6 +12,7 @@
 struct PersistenceAdapter::Impl {
     PGconn* conn{nullptr};
     bool prepared{false};
+    std::mutex db_mutex;
 };
 
 static std::string to_string_int(int v) {
@@ -77,6 +79,7 @@ PersistenceAdapter::~PersistenceAdapter()
 bool PersistenceAdapter::insert(int key, const std::string &value)
 {
     if (!p_ || !p_->conn) return false;
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     std::string keyStr = to_string_int(key);
     const char* params[2] = { keyStr.c_str(), value.c_str() };
@@ -104,6 +107,7 @@ bool PersistenceAdapter::insert(int key, const std::string &value)
 bool PersistenceAdapter::update(int key, const std::string &value)
 {
     if (!p_ || !p_->conn) return false;
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     std::string keyStr = to_string_int(key);
     const char* params[2] = { keyStr.c_str(), value.c_str() };
@@ -133,6 +137,7 @@ bool PersistenceAdapter::update(int key, const std::string &value)
 bool PersistenceAdapter::remove(int key)
 {
     if (!p_ || !p_->conn) return false;
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     std::string keyStr = to_string_int(key);
     const char* params[1] = { keyStr.c_str() };
@@ -163,6 +168,7 @@ bool PersistenceAdapter::remove(int key)
 std::unique_ptr<std::string> PersistenceAdapter::get(int key)
 {
     if (!p_ || !p_->conn) return nullptr;
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     std::string keyStr = to_string_int(key);
     const char* params[1] = { keyStr.c_str() };
@@ -200,6 +206,7 @@ PersistenceAdapter::TxResult PersistenceAdapter::runTransaction(const std::vecto
         result.failures.push_back({Operation{OpType::Insert, 0, ""}, "no connection"});
         return result;
     }
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     auto exec_simple = [&](const char* sql) -> bool {
         PGresult* r = PQexec(p_->conn, sql);
@@ -358,6 +365,7 @@ nlohmann::json PersistenceAdapter::runTransactionJson(const std::vector<Operatio
         push_result(OpType::Insert, 0, "failed", "no connection");
         return report;
     }
+    std::lock_guard<std::mutex> lock(p_->db_mutex);
 
     auto exec_simple = [&](const char* sql) -> bool {
         PGresult* r = PQexec(p_->conn, sql);
