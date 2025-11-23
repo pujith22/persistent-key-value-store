@@ -159,6 +159,47 @@ Load testing notes
 - Scrape `/metrics` at a steady interval (for example every 5s) to collect CPU, memory, disk and network data points alongside your request/response metrics. CPU utilization is computed from kernel counters between successive `/metrics` calls — scrape interval affects resolution.
 - Disk bytes reported are cumulative since boot (derived from sectors). If you need per-second rates, you can compute deltas between successive `/metrics` samples or request an update to include per-second rate fields.
 
+### Automated Experiments
+
+Use `experiment_runner.py` to run a full suite of closed-loop and open-loop load tests across different concurrency levels and arrival rates.
+
+```sh
+# Run all experiments (closed and open loop)
+python3 experiment_runner.py --url http://localhost:2222 --mode all
+
+# Run only closed-loop experiments
+python3 experiment_runner.py --url http://localhost:2222 --mode closed
+
+# Run only open-loop experiments
+python3 experiment_runner.py --url http://localhost:2222 --mode open
+```
+
+The script will:
+
+1. Run tests for Workloads 1, 2, and 3.
+2. Collect server-side metrics (CPU, Disk, Memory) and client-side metrics (Throughput, Latency).
+3. Generate plots in the `results/` directory.
+
+### Saturation Tests
+
+We provide specialized scripts to stress test specific system resources:
+
+**CPU Saturation Test**
+Target: Saturate server CPU by flooding it with GET requests for a small set of hot keys (1-100).
+
+```sh
+python3 cpu_saturation_test.py --start-rate 100 --step 500 --max-rate 10000
+```
+
+**Disk Saturation Test**
+Target: Saturate disk I/O by flooding it with write operations (POST/PUT) using larger payloads (1KB).
+
+```sh
+python3 disk_saturation_test.py --start-rate 100 --step 100 --max-rate 2000
+```
+
+This script generates plots for Disk Utilization, Write Throughput, and Latency in `results_disk_saturation/`.
+
 Example: poll `/metrics` every 5 seconds using the included helper script (requires `jq`):
 
 ```sh
