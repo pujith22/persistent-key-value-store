@@ -93,6 +93,19 @@ The server will read `SERVER_HOST` and `SERVER_PORT` from the environment at sta
 New CLI flags
 - `--no-preload` or `--skip-preload` — skip preloading keys from persistence into the inline cache during startup. By default the server synchronously preloads keys 1..1000 from the database into the inline cache before it begins accepting connections (this can increase startup time but reduces cold-cache misses).
 
+Connection pooling and async DB worker pool
+- The persistence adapter now maintains a pool of libpq connections and an internal worker thread pool to offload blocking database operations. This reduces HTTP worker thread starvation under heavy load.
+- Prepared statements required by the adapter are created on each pooled connection at startup. Connections that fail to prepare are dropped and exposed via pool metrics.
+
+Upgraded `/metrics` end point
+- The `/metrics` end currently returns a JSON document containing cache stats and persistence pool metrics. It also exposes several system-level metrics useful for stress tests and load generators. Key fields include:
+       - `cpu_utilization_percent` — CPU busy percentage since the last `/metrics` sample (kernel counters based)
+       - `memory_kb` — object with `total`, `free`, and `available` (in kB)
+       - `disk_read_bytes`, `disk_write_bytes` — cumulative bytes read/written across block devices (derived from `/sys/block/*/stat` sectors; converted assuming 512B sectors)
+       - `disk_io_ops` — object with `read_ios` and `write_ios` counts
+       - `network_bytes` — object with `rx` and `tx` cumulative bytes (aggregated from `/proc/net/dev`, non-loopback)
+       - `persistence_pool` — connection pool counters and stats (dropped connections, total creates, free connections, etc.)
+
 Examples
 - Start normally (preload enabled):
 
@@ -125,11 +138,91 @@ PG_CONNINFO='dbname=kvstore user=pujith22 password=...' ./scripts/insert_random_
 Use the fake persistence provider to exercise the HTTP surface without PostgreSQL:
 
 ```sh
-g++ -std=c++17 test/test_server.cpp server.cpp -I include -I third_party -o test_server.out
+# Build unit/integration tests WITHOUT a PostgreSQL client (recommended for fast local runs)
+# This uses the test-only persistence adapter stub in `test/persistence_adapter_stub.cpp`.
+g++ -std=c++17 test/test_server.cpp server.cpp test/persistence_adapter_stub.cpp \
+       -I include -I third_party -lpthread -o test_server.out
 ./test_server.out
+
+# There are also specialized tests. Example: metrics test that validates /metrics JSON
+g++ -std=c++17 test/test_metrics.cpp server.cpp test/persistence_adapter_stub.cpp \
+       -I include -I third_party -lpthread -o test_metrics.out
+./test_metrics.out
 ```
 
-The test suite validates transactional semantics (including rollback on the first failure), bulk query robustness, and cache integration.
+Full integration tests that exercise the real persistence adapter require PostgreSQL client headers/libpq and a reachable DB. See `build_instruction.txt` for environment hints and the `scripts/setup_pg_env.zsh` helper.
+
+The test suite validates transactional semantics (including rollback on the first failure), bulk query robustness, cache integration, and the presence/types of the new system and process-level metrics.
+
+Load testing notes
+- Use `scripts/insert_random_kv.sh` to populate the database before starting a load test.
+- Scrape `/metrics` at a steady interval (for example every 5s) to collect CPU, memory, disk and network data points alongside your request/response metrics. CPU utilization is computed from kernel counters between successive `/metrics` calls — scrape interval affects resolution.
+- Disk bytes reported are cumulative since boot (derived from sectors). If you need per-second rates, you can compute deltas between successive `/metrics` samples or request an update to include per-second rate fields.
+
+Example: poll `/metrics` every 5 seconds using the included helper script (requires `jq`):
+
+```sh
+./scripts/poll_metrics.sh http://localhost:2222/metrics 5
+```
+
+The script prints a single-line summary per poll including CPU percent, memory available/total, disk read/write bytes per second and network rx/tx bytes per second.
+
+## Metrics fields
+
+The `/metrics` endpoint returns a JSON object combining cache stats, persistence pool metrics, system metrics and process metrics. Below are the fields and how to interpret them:
+
+- Cache metrics
+       - `entries` : integer — number of entries currently in the inline cache.
+       - `bytes` : integer — estimated bytes consumed by cached entries.
+       - `hits` : integer — cumulative cache hits.
+       - `misses` : integer — cumulative cache misses.
+       - `evictions` : integer — cumulative eviction count.
+
+- Persistence pool
+       - `persistence_pool` : object — connection pool counters returned by the adapter:
+              - `pool_size` : configured pool size (int)
+              - `free_conns` : number of currently free/connections available (int)
+              - `dropped_conns` : number of connections dropped due to prepare/connect failures (int)
+              - `total_conn_creates` : total number of connections created (int)
+              - `total_conn_create_failures` : total connection create failures (int)
+
+- CPU & memory
+       - `cpu_utilization_percent` : double — percent busy since the last `/metrics` sample (kernel jiffies based). This is an average across all CPUs computed from /proc/stat.
+       - `memory_kb` : object — memory snapshot in kilobytes:
+              - `total` : total RAM (kB)
+              - `free` : free RAM (kB)
+              - `available` : memory available for new processes (kB)
+
+- Disk (I/O activity)
+       - `disk_read_bytes`, `disk_write_bytes` : unsigned integer — cumulative bytes read/written across block devices since boot (derived from sectors reported in /sys/block/*/stat). Note: sector->byte uses 512B by default; if you need exact values we can read per-device `hw_sector_size`.
+       - `disk_io_ops` : object — cumulative I/O operation counts:
+              - `read_ios` : number of read I/O completions
+              - `write_ios` : number of write I/O completions
+       - `disk_read_bytes_per_sec`, `disk_write_bytes_per_sec` : double — rate computed between successive metrics samples (bytes/sec)
+       - `disk_read_ios_per_sec`, `disk_write_ios_per_sec` : double — IOPS rate (ops/sec)
+       - `disk_utilization_percent_avg_per_device` : double — average busy percentage per reported device (0..100%). Computed as device-ms / (elapsed_ms * device_count).
+       - `disk_utilization_percent_aggregate` : double — aggregate device busy percent (total device-ms / elapsed_ms * 100). This is the overall device-time fraction and can exceed 100% for multi-device systems (e.g., two fully busy devices -> ~200%). Use this as the overall "how busy" signal.
+       - `disk_devices_reported` : int — number of block devices sampled under /sys/block.
+
+- Network
+       - `network_bytes` : object — cumulative bytes:
+              - `rx` : bytes received since boot
+              - `tx` : bytes transmitted since boot
+       - `network_rx_bytes_per_sec`, `network_tx_bytes_per_sec` : double — rates computed between successive metrics samples (bytes/sec)
+
+- Process-level
+       - `process` : object — process-specific metrics for the server process:
+              - `vms_kb` : virtual memory size (kB)
+              - `rss_kb` : resident set size (kB)
+              - `threads` : number of threads in the process
+              - `open_fds` : number of open file descriptors
+
+Notes & interpretation
+- For load testing on SSDs, prefer bytes/sec and IOPS (disk_read_bytes_per_sec, disk_read_ios_per_sec). Disk time-busy will often be low even under high throughput because SSDs are low-latency devices.
+- `disk_utilization_percent_aggregate` is the recommended single-number "overall disk activity" metric (it sums device-ms and is independent of the number of devices). Expect values >100% on multi-device systems.
+- Per-device breakdown (name, per-device bytes/sec, util%) is not included by default — ask if you'd like per-device arrays added to `/metrics` for hotspot debugging.
+- Filesystem capacity (used/available space) is not included; I can add `statvfs`-based fields (total_bytes, used_bytes, free_bytes) for the mount where the DB lives if useful.
+
 
 ## Credits
 

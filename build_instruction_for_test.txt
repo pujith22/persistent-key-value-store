@@ -1,5 +1,12 @@
-# include all libraries needed for successful compilation
-g++ test/test_server.cpp -I third_party -I include server.cpp -o test_server.out
+# Test builds (no PostgreSQL client required)
+# The repository includes a test-only persistence adapter stub at
+# `test/persistence_adapter_stub.cpp` which the tests use to avoid linking libpq.
 
-# Test harnesses inject a fake persistence provider before calling start(), so
-# no PostgreSQL client or adapter linkage is required for this build.
+g++ -std=c++17 test/test_server.cpp server.cpp test/persistence_adapter_stub.cpp -I include -I third_party -lpthread -o test_server.out
+./test_server.out
+
+g++ -std=c++17 test/test_metrics.cpp server.cpp test/persistence_adapter_stub.cpp -I include -I third_party -lpthread -o test_metrics.out
+./test_metrics.out
+
+# For integration tests against an actual PostgreSQL instance, link persistence_adapter.cpp
+# and provide libpq headers/libs (see build_instruction.txt for production build hints).

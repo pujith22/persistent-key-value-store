@@ -9,6 +9,11 @@
 #include <algorithm>
 #include <cctype>
 #include <functional>
+#include <thread>
+#include <mutex>
+#include <map>
+#include <fstream>
+#include <filesystem>
 
 const std::vector<KeyValueServer::RouteDescriptor> KeyValueServer::routes_json = {
     {"GET", "/", "Machine-readable service catalog"},
@@ -1054,6 +1059,267 @@ void KeyValueServer::metricsHandler(const httplib::Request& req, httplib::Respon
         try {
             out["persistence_pool"] = ada->poolMetrics();
         } catch (...) {}
+    }
+
+    // System metrics (Linux-specific: /proc and /sys). We compute deltas since the last sample
+    try {
+        static std::mutex sys_metrics_mutex;
+        struct CpuSample { unsigned long long user=0, nice=0, system=0, idle=0, iowait=0, irq=0, softirq=0, steal=0; };
+        struct SysSnapshot {
+            CpuSample cpu;
+            unsigned long long disk_sectors_read = 0;
+            unsigned long long disk_sectors_written = 0;
+            unsigned long long disk_read_ios = 0;
+            unsigned long long disk_write_ios = 0;
+            unsigned long long disk_io_ms = 0; // aggregated time doing I/Os (ms)
+            unsigned long long net_rx_bytes = 0;
+            unsigned long long net_tx_bytes = 0;
+            std::chrono::steady_clock::time_point ts = std::chrono::steady_clock::now();
+            size_t disk_device_count = 0;
+        };
+        static SysSnapshot last_snapshot;
+
+        auto read_cpu = [&]() -> CpuSample {
+            CpuSample s;
+            std::ifstream f("/proc/stat");
+            if (!f.is_open()) return s;
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.rfind("cpu ", 0) == 0) {
+                    std::istringstream ss(line);
+                    std::string cpu_label;
+                    ss >> cpu_label;
+                    ss >> s.user >> s.nice >> s.system >> s.idle >> s.iowait >> s.irq >> s.softirq >> s.steal;
+                    break;
+                }
+            }
+            return s;
+        };
+
+        auto now = std::chrono::steady_clock::now();
+        SysSnapshot cur;
+        cur.ts = now;
+        cur.cpu = read_cpu();
+
+        // Memory
+        std::ifstream memf("/proc/meminfo");
+        if (memf.is_open()) {
+            std::string l;
+            unsigned long long mem_total_kb = 0, mem_free_kb = 0, mem_available_kb = 0;
+            while (std::getline(memf, l)) {
+                if (l.rfind("MemTotal:", 0) == 0) {
+                    std::istringstream ss(l.substr(9)); ss >> mem_total_kb; // kB
+                } else if (l.rfind("MemFree:", 0) == 0) {
+                    std::istringstream ss(l.substr(8)); ss >> mem_free_kb;
+                } else if (l.rfind("MemAvailable:", 0) == 0) {
+                    std::istringstream ss(l.substr(13)); ss >> mem_available_kb;
+                }
+            }
+            out["memory_kb"] = { {"total", mem_total_kb}, {"free", mem_free_kb}, {"available", mem_available_kb} };
+        }
+
+        // Disk I/O: aggregate /sys/block/*/stat and collect sectors and io_ms (field 10 per-device)
+        unsigned long long total_reads_sectors = 0, total_writes_sectors = 0, total_read_ios = 0, total_write_ios = 0, total_io_ms = 0;
+        size_t device_count = 0;
+        for (const auto &entry : std::filesystem::directory_iterator("/sys/block")) {
+            try {
+                std::string statpath = entry.path().string() + "/stat";
+                std::ifstream sf(statpath);
+                if (!sf.is_open()) continue;
+                std::string ln;
+                if (!std::getline(sf, ln)) continue;
+                std::istringstream ss(ln);
+                std::vector<unsigned long long> fields;
+                unsigned long long v;
+                while (ss >> v) fields.push_back(v);
+                if (fields.size() >= 11) {
+                    // fields[2] = sectors read, fields[6] = sectors written, fields[0]=reads completed, fields[4]=writes completed
+                    total_reads_sectors += fields[2];
+                    total_writes_sectors += fields[6];
+                    total_read_ios += fields[0];
+                    total_write_ios += fields[4];
+                    // field 9 (0-based) is time spent doing I/Os (ms)
+                    total_io_ms += fields[9];
+                    device_count++;
+                } else if (fields.size() >= 7) {
+                    total_reads_sectors += (fields.size() > 2 ? fields[2] : 0);
+                    total_writes_sectors += (fields.size() > 6 ? fields[6] : 0);
+                    total_read_ios += (fields.size() > 0 ? fields[0] : 0);
+                    total_write_ios += (fields.size() > 4 ? fields[4] : 0);
+                    // no io_ms available
+                    device_count++;
+                }
+            } catch (...) {
+                continue;
+            }
+        }
+        cur.disk_sectors_read = total_reads_sectors;
+        cur.disk_sectors_written = total_writes_sectors;
+        cur.disk_read_ios = total_read_ios;
+        cur.disk_write_ios = total_write_ios;
+        cur.disk_io_ms = total_io_ms;
+        cur.disk_device_count = device_count;
+
+        // Network
+        std::ifstream netf("/proc/net/dev");
+        if (netf.is_open()) {
+            std::string line;
+            std::getline(netf, line);
+            std::getline(netf, line);
+            unsigned long long total_rx = 0, total_tx = 0;
+            while (std::getline(netf, line)) {
+                std::istringstream ss(line);
+                std::string iface;
+                if (!(ss >> iface)) continue;
+                if (iface.back() == ':') iface.pop_back();
+                unsigned long long rx_bytes=0, rx_packets, rx_errs, rx_drop, rx_fifo, rx_frame, rx_compressed, rx_multicast;
+                unsigned long long tx_bytes=0, tx_packets, tx_errs, tx_drop, tx_fifo, tx_colls, tx_carrier, tx_compressed;
+                ss >> rx_bytes >> rx_packets >> rx_errs >> rx_drop >> rx_fifo >> rx_frame >> rx_compressed >> rx_multicast
+                   >> tx_bytes >> tx_packets >> tx_errs >> tx_drop >> tx_fifo >> tx_colls >> tx_carrier >> tx_compressed;
+                if (iface == "lo") continue;
+                total_rx += rx_bytes;
+                total_tx += tx_bytes;
+            }
+            cur.net_rx_bytes = total_rx;
+            cur.net_tx_bytes = total_tx;
+        }
+
+        // Compute deltas and rates
+        double cpu_util = 0.0;
+        double elapsed_s = 0.0;
+        unsigned long long delta_read_bytes = 0, delta_write_bytes = 0, delta_read_ios = 0, delta_write_ios = 0;
+        unsigned long long delta_rx = 0, delta_tx = 0;
+        double disk_util_pct = 0.0;
+
+        {
+            std::lock_guard<std::mutex> lk(sys_metrics_mutex);
+            // CPU
+            unsigned long long prev_idle = last_snapshot.cpu.idle + last_snapshot.cpu.iowait;
+            unsigned long long idle = cur.cpu.idle + cur.cpu.iowait;
+            unsigned long long prev_non_idle = last_snapshot.cpu.user + last_snapshot.cpu.nice + last_snapshot.cpu.system + last_snapshot.cpu.irq + last_snapshot.cpu.softirq + last_snapshot.cpu.steal;
+            unsigned long long non_idle = cur.cpu.user + cur.cpu.nice + cur.cpu.system + cur.cpu.irq + cur.cpu.softirq + cur.cpu.steal;
+            unsigned long long prev_total = prev_idle + prev_non_idle;
+            unsigned long long total = idle + non_idle;
+            unsigned long long totald = 0, idled = 0;
+            if (total >= prev_total) totald = total - prev_total; else totald = 0;
+            if (idle >= prev_idle) idled = idle - prev_idle; else idled = 0;
+            if (totald > 0) cpu_util = (double)(totald - idled) * 100.0 / (double)totald;
+
+            // time delta
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(cur.ts - last_snapshot.ts).count();
+            if (ms > 0) elapsed_s = (double)ms / 1000.0;
+
+            // disk deltas
+            if (cur.disk_sectors_read >= last_snapshot.disk_sectors_read) delta_read_bytes = (cur.disk_sectors_read - last_snapshot.disk_sectors_read) * 512ULL;
+            if (cur.disk_sectors_written >= last_snapshot.disk_sectors_written) delta_write_bytes = (cur.disk_sectors_written - last_snapshot.disk_sectors_written) * 512ULL;
+            if (cur.disk_read_ios >= last_snapshot.disk_read_ios) delta_read_ios = cur.disk_read_ios - last_snapshot.disk_read_ios;
+            if (cur.disk_write_ios >= last_snapshot.disk_write_ios) delta_write_ios = cur.disk_write_ios - last_snapshot.disk_write_ios;
+
+            // disk utilization: use aggregated io_ms (field 10) per device
+            unsigned long long delta_io_ms = 0;
+            if (cur.disk_io_ms >= last_snapshot.disk_io_ms) delta_io_ms = cur.disk_io_ms - last_snapshot.disk_io_ms;
+            if (elapsed_s > 0.0 && cur.disk_device_count > 0) {
+                double elapsed_ms = elapsed_s * 1000.0;
+                // average busy percent across devices (previous behavior)
+                double avg_per_device = (double)delta_io_ms / (elapsed_ms * (double)cur.disk_device_count) * 100.0;
+                if (avg_per_device < 0.0) avg_per_device = 0.0;
+                if (avg_per_device > 100.0) avg_per_device = 100.0;
+                disk_util_pct = avg_per_device;
+                // aggregate busy percent: total device-ms per wall-ms (not divided by device count)
+                double aggregate_pct = 0.0;
+                aggregate_pct = (double)delta_io_ms / elapsed_ms * 100.0;
+                if (aggregate_pct < 0.0) aggregate_pct = 0.0;
+                // note: aggregate_pct can exceed 100% if there are multiple devices (it represents total device-ms per wall-ms)
+                out["disk_utilization_percent_aggregate"] = aggregate_pct;
+            }
+
+            // network deltas
+            if (cur.net_rx_bytes >= last_snapshot.net_rx_bytes) delta_rx = cur.net_rx_bytes - last_snapshot.net_rx_bytes;
+            if (cur.net_tx_bytes >= last_snapshot.net_tx_bytes) delta_tx = cur.net_tx_bytes - last_snapshot.net_tx_bytes;
+
+            // update last_snapshot
+            last_snapshot = cur;
+        }
+
+        out["cpu_utilization_percent"] = cpu_util;
+        out["disk_read_bytes"] = cur.disk_sectors_read * 512ULL;
+        out["disk_write_bytes"] = cur.disk_sectors_written * 512ULL;
+        out["disk_io_ops"] = { {"read_ios", cur.disk_read_ios}, {"write_ios", cur.disk_write_ios} };
+    out["disk_utilization_percent_avg_per_device"] = disk_util_pct;
+
+        // per-second rates (if elapsed_s > 0)
+        if (elapsed_s > 0.0) {
+            out["disk_read_bytes_per_sec"] = (double)delta_read_bytes / elapsed_s;
+            out["disk_write_bytes_per_sec"] = (double)delta_write_bytes / elapsed_s;
+            out["disk_read_ios_per_sec"] = (double)delta_read_ios / elapsed_s;
+            out["disk_write_ios_per_sec"] = (double)delta_write_ios / elapsed_s;
+            out["network_bytes"] = { {"rx", cur.net_rx_bytes}, {"tx", cur.net_tx_bytes} };
+            out["network_rx_bytes_per_sec"] = (double)delta_rx / elapsed_s;
+            out["network_tx_bytes_per_sec"] = (double)delta_tx / elapsed_s;
+        } else {
+            out["disk_read_bytes_per_sec"] = 0.0;
+            out["disk_write_bytes_per_sec"] = 0.0;
+            out["disk_read_ios_per_sec"] = 0.0;
+            out["disk_write_ios_per_sec"] = 0.0;
+            out["network_bytes"] = { {"rx", cur.net_rx_bytes}, {"tx", cur.net_tx_bytes} };
+            out["network_rx_bytes_per_sec"] = 0.0;
+            out["network_tx_bytes_per_sec"] = 0.0;
+        }
+        out["disk_devices_reported"] = (int)cur.disk_device_count;
+
+        // Process-level metrics (Linux /proc/self)
+        try {
+            // RSS and VMS from /proc/self/statm (in pages)
+            std::ifstream statm("/proc/self/statm");
+            if (statm.is_open()) {
+                unsigned long size_pages = 0, resident_pages = 0;
+                statm >> size_pages >> resident_pages;
+                long page_size = sysconf(_SC_PAGESIZE);
+                unsigned long vms_kb = 0, rss_kb = 0;
+                if (page_size > 0) {
+                    vms_kb = (size_pages * (unsigned long)page_size) / 1024UL;
+                    rss_kb = (resident_pages * (unsigned long)page_size) / 1024UL;
+                }
+                out["process"] = {
+                    {"vms_kb", vms_kb},
+                    {"rss_kb", rss_kb}
+                };
+            }
+
+            // Thread count and other info from /proc/self/status
+            std::ifstream statusf("/proc/self/status");
+            if (statusf.is_open()) {
+                std::string line;
+                int threads = 0;
+                while (std::getline(statusf, line)) {
+                    if (line.rfind("Threads:", 0) == 0) {
+                        std::istringstream ss(line.substr(8)); ss >> threads;
+                        break;
+                    }
+                }
+                if (out.contains("process") && out["process"].is_object()) {
+                    out["process"]["threads"] = threads;
+                } else {
+                    out["process"] = { {"threads", threads} };
+                }
+            }
+
+            // Open file descriptor count via /proc/self/fd
+            size_t fd_count = 0;
+            for (const auto &entry : std::filesystem::directory_iterator("/proc/self/fd")) {
+                (void)entry;
+                ++fd_count;
+            }
+            if (out.contains("process") && out["process"].is_object()) {
+                out["process"]["open_fds"] = (int)fd_count;
+            } else {
+                out["process"] = { {"open_fds", (int)fd_count} };
+            }
+        } catch (...) {
+            // ignore process metric failures
+        }
+    } catch (...) {
+        // don't let system metrics break the endpoint
     }
     json_response(res, 200, out, "ok");
     logResponse(res, std::chrono::steady_clock::now() - start);
