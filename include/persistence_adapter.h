@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <future>
 #include "nlohmann/json.hpp"
 
 // PersistenceAdapter: lightweight wrapper around PostgreSQL C client (libpq)
@@ -74,6 +75,16 @@ public:
            ]
     */
     nlohmann::json runTransactionJson(const std::vector<Operation>& ops, TxMode mode);
+
+    // Async variants: submit work to an internal worker pool and return a future.
+    // These are concrete APIs on the adapter (not part of the abstract PersistenceProvider).
+    std::future<std::unique_ptr<std::string>> getAsync(int key);
+    std::future<nlohmann::json> runTransactionJsonAsync(const std::vector<Operation>& ops, TxMode mode);
+
+    // runtime metrics/accessors
+    int droppedPoolConnections() const;
+    // Return a JSON object with pool metrics: pool_size, free_conns, dropped_conns, total_conn_creates, total_conn_failures
+    nlohmann::json poolMetrics() const;
 
 private:
     struct Impl;               // PImpl to avoid exposing libpq headers in the public header

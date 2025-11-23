@@ -212,15 +212,35 @@ void KeyValueServer::getKeyHandler(const httplib::Request& req, httplib::Respons
         bool persistence_checked = false;
         if (persistence_adapter) {
             persistence_checked = true;
-            if (auto persisted = persistence_adapter->get(key)) {
-                out["found"] = true;
-                out["value"] = *persisted;
-                out["source"] = "persistence";
-                bool inserted_cache = inline_cache.update_or_insert(key, *persisted);
-                out["cache_populated"] = inserted_cache;
-                json_response(res, 200, out, "ok");
-                logResponse(res, std::chrono::steady_clock::now() - start);
-                return;
+            // if underlying adapter supports async get, offload DB work to its worker pool
+            if (auto* ada = dynamic_cast<PersistenceAdapter*>(persistence_adapter.get())) {
+                try {
+                    auto fut = ada->getAsync(key);
+                    auto persisted = fut.get();
+                    if (persisted) {
+                        out["found"] = true;
+                        out["value"] = *persisted;
+                        out["source"] = "persistence";
+                        bool inserted_cache = inline_cache.update_or_insert(key, *persisted);
+                        out["cache_populated"] = inserted_cache;
+                        json_response(res, 200, out, "ok");
+                        logResponse(res, std::chrono::steady_clock::now() - start);
+                        return;
+                    }
+                } catch (...) {
+                    // fall back to synchronous call below
+                }
+            } else {
+                if (auto persisted = persistence_adapter->get(key)) {
+                    out["found"] = true;
+                    out["value"] = *persisted;
+                    out["source"] = "persistence";
+                    bool inserted_cache = inline_cache.update_or_insert(key, *persisted);
+                    out["cache_populated"] = inserted_cache;
+                    json_response(res, 200, out, "ok");
+                    logResponse(res, std::chrono::steady_clock::now() - start);
+                    return;
+                }
             }
         }
         out["found"] = false;
@@ -566,30 +586,35 @@ void KeyValueServer::bulkUpdateHandler(const httplib::Request& req, httplib::Res
 #if defined(USE_PG)
     if (auto* adapter = dynamic_cast<PersistenceAdapter*>(persistence_adapter.get())) {
         transaction_mode = "rollback";
-        auto report = adapter->runTransactionJson(tx_ops, PersistenceAdapter::TxMode::RollbackOnError);
-        tx_success = report.value("success", false);
+        // use async variant to offload DB work to adapter worker pool
+        try {
+            auto fut = adapter->runTransactionJsonAsync(tx_ops, PersistenceAdapter::TxMode::RollbackOnError);
+            auto report = fut.get();
+            tx_success = report.value("success", false);
 
-        if (report.contains("results") && report["results"].is_array()) {
-            processed = report["results"].size();
-            for (size_t i = 0; i < report["results"].size() && i < parsed_ops.size(); ++i) {
-                const auto& item = report["results"][i];
-                nlohmann::json entry;
-                entry["index"] = i;
-                entry["operation"] = parsed_ops[i].op_name;
-                entry["key"] = item.value("key", parsed_ops[i].op.key);
-                entry["status"] = item.value("status", "failed");
-                entry["input"] = parsed_ops[i].original;
-                if (item.contains("value")) entry["value"] = item["value"];
-                if (item.contains("error")) entry["error"] = item["error"];
-                if (entry["status"] == "ok") {
-                    succeeded++;
-                } else if (failure_reason.empty() && item.contains("error") && item["error"].is_string()) {
-                    failure_reason = item["error"].get<std::string>();
+            if (report.contains("results") && report["results"].is_array()) {
+                processed = report["results"].size();
+                for (size_t i = 0; i < report["results"].size() && i < parsed_ops.size(); ++i) {
+                    const auto& item = report["results"][i];
+                    nlohmann::json entry;
+                    entry["index"] = i;
+                    entry["operation"] = parsed_ops[i].op_name;
+                    entry["key"] = item.value("key", parsed_ops[i].op.key);
+                    entry["status"] = item.value("status", "failed");
+                    entry["input"] = parsed_ops[i].original;
+                    if (item.contains("value")) entry["value"] = item["value"];
+                    if (item.contains("error")) entry["error"] = item["error"];
+                    if (entry["status"] == "ok") {
+                        succeeded++;
+                    } else if (failure_reason.empty() && item.contains("error") && item["error"].is_string()) {
+                        failure_reason = item["error"].get<std::string>();
+                    }
+                    results.push_back(std::move(entry));
                 }
-                results.push_back(std::move(entry));
             }
+        } catch (...) {
+            // fall back to synchronous below if async fails
         }
-
         if (!tx_success && failure_reason.empty()) {
             failure_reason = "transaction rolled back due to failure";
         }
@@ -1024,6 +1049,12 @@ void KeyValueServer::metricsHandler(const httplib::Request& req, httplib::Respon
     logRequest(req);
     auto st = inline_cache.stats();
     nlohmann::json out{{"entries",st.size_entries},{"bytes",st.bytes_estimated},{"hits",st.hits},{"misses",st.misses},{"evictions",st.evictions}};
+    // attach persistence adapter pool metrics if available
+    if (auto* ada = dynamic_cast<PersistenceAdapter*>(persistence_adapter.get())) {
+        try {
+            out["persistence_pool"] = ada->poolMetrics();
+        } catch (...) {}
+    }
     json_response(res, 200, out, "ok");
     logResponse(res, std::chrono::steady_clock::now() - start);
 }
