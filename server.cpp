@@ -943,7 +943,36 @@ bool KeyValueServer::start() {
     //     return abort_startup("uninitialized", "persistence adapter could not be initialized");
     // }
 
-    emit_startup_log(true, "");
+    // Preload cache from persistence for keys 1..1000 before accepting connections (unless disabled).
+    size_t preload_attempts = 0;
+    size_t preload_loaded = 0;
+    if (!skip_preload && persistence_adapter) {
+        // iterate and try to load; do not abort startup on missing keys — only log progress
+        const int preload_start = 1;
+        const int preload_end = 1000;
+        for (int k = preload_start; k <= preload_end; ++k) {
+            try {
+                auto vptr = persistence_adapter->get(k);
+                ++preload_attempts;
+                if (vptr && !vptr->empty()) {
+                    // insert into inline cache (insert_if_absent keeps existing entries)
+                    inline_cache.insert_if_absent(k, *vptr);
+                    ++preload_loaded;
+                }
+                if (preload_attempts % 100 == 0) {
+                    std::cout << "Preload progress: attempted=" << preload_attempts << " loaded=" << preload_loaded << "\n";
+                }
+            } catch (const std::exception &e) {
+                // log and continue
+                std::cerr << "Preload error for key=" << k << " : " << e.what() << "\n";
+            }
+        }
+    }
+
+    // emit startup log with preload summary
+    std::ostringstream startup_message;
+    startup_message << "preload_attempts=" << preload_attempts << " preload_loaded=" << preload_loaded;
+    emit_startup_log(true, startup_message.str());
     return server_.listen(host_, port_);
 }
 

@@ -38,6 +38,9 @@ public:
     // Access underlying httplib server if advanced customization needed.
     httplib::Server& raw();
 
+    // Allow skipping preload of cache on startup
+    void setSkipPreload(bool skip) { skip_preload = skip; }
+
     // Allow tests/consumers to inject custom persistence implementation.
     void setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& status_label = "injected");
 
@@ -87,6 +90,9 @@ private:
     // persistence adapter is required; start() fails fast if unavailable
     std::unique_ptr<PersistenceProvider> persistence_adapter;
     bool persistence_injected{false};
+
+    // if true, do not perform preload of keys from persistence_adapter during start()
+    bool skip_preload{false};
 
     // cached DB connection status message
     std::string db_connection_status;

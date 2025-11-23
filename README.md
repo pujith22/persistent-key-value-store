@@ -79,6 +79,47 @@ g++ -std=c++17 server.cpp main_server.cpp persistence_adapter.cpp \
 
 The process exits with status `1` if persistence is unreachable.
 
+### Configuration & runtime flags
+
+You can configure where the server listens using a simple `.env` file placed at the project root or by setting environment variables directly. Example `.env` (already included as `.env` in the repo):
+
+```
+SERVER_HOST=0.0.0.0
+SERVER_PORT=2222
+```
+
+The server will read `SERVER_HOST` and `SERVER_PORT` from the environment at startup. Command-line flags take precedence for other options (see below).
+
+New CLI flags
+- `--no-preload` or `--skip-preload` — skip preloading keys from persistence into the inline cache during startup. By default the server synchronously preloads keys 1..1000 from the database into the inline cache before it begins accepting connections (this can increase startup time but reduces cold-cache misses).
+
+Examples
+- Start normally (preload enabled):
+
+```sh
+./kv_server.out --json-logs --policy=lru
+```
+
+- Start and skip preloading (faster startup):
+
+```sh
+./kv_server.out --json-logs --policy=lru --no-preload
+```
+
+Preload behavior
+- When preload is enabled (default), the server attempts to fetch keys in the range 1..1000 from the persistence layer and populate the inline cache with any found values. Progress is logged (every 100 keys) and a final preload summary is included in the startup log.
+- When preload is disabled with `--no-preload`, the server starts listening immediately and the cache will be populated on demand.
+
+Insertion helper script
+- A convenience script is included at `scripts/insert_random_kv.sh` to populate the database with test data. It inserts integer keys in a configurable range and random string values. It uses `INSERT ... ON CONFLICT DO NOTHING` so existing keys are not overwritten.
+
+Example:
+
+```sh
+PG_CONNINFO='dbname=kvstore user=pujith22 password=...' ./scripts/insert_random_kv.sh --start 1 --end 1000 --min-len 8 --max-len 256
+```
+
+
 ## Testing
 
 Use the fake persistence provider to exercise the HTTP surface without PostgreSQL:

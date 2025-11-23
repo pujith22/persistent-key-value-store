@@ -60,6 +60,14 @@ static bool parse_json_logging(int argc, char** argv) {
     return false;
 }
 
+static bool parse_skip_preload(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--no-preload" || arg == "--skip-preload") return true;
+    }
+    return false;
+}
+
 int main(int argc, char** argv) {
     InlineCache::Policy policy = parse_policy(argc, argv);
     bool enable_json_logging = parse_json_logging(argc, argv);
@@ -79,6 +87,8 @@ int main(int argc, char** argv) {
     }
 
     KeyValueServer server{host, port, policy, enable_json_logging};
+    bool skip_preload = parse_skip_preload(argc, argv);
+    if (skip_preload) server.setSkipPreload(true);
     server.setupRoutes();
     if (!server.start()) {
         return 1;
