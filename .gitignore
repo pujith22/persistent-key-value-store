@@ -68,3 +68,7 @@ pg_ident.conf.sample
 *.swp
 [Tt]humbs.db
 .DS_Store
+
+#sensitive files
+.env
+.env.local
