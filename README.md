@@ -220,8 +220,6 @@ The `/metrics` endpoint returns a JSON object combining cache stats, persistence
 Notes & interpretation
 - For load testing on SSDs, prefer bytes/sec and IOPS (disk_read_bytes_per_sec, disk_read_ios_per_sec). Disk time-busy will often be low even under high throughput because SSDs are low-latency devices.
 - `disk_utilization_percent_aggregate` is the recommended single-number "overall disk activity" metric (it sums device-ms and is independent of the number of devices). Expect values >100% on multi-device systems.
-- Per-device breakdown (name, per-device bytes/sec, util%) is not included by default — ask if you'd like per-device arrays added to `/metrics` for hotspot debugging.
-- Filesystem capacity (used/available space) is not included; I can add `statvfs`-based fields (total_bytes, used_bytes, free_bytes) for the mount where the DB lives if useful.
 
 
 ## Credits
