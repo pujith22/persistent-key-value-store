@@ -5,8 +5,12 @@ import json
 import requests
 import threading
 import argparse
+import matplotlib.pyplot as plt
+import os
 
 OPEN_LOOP_SCRIPT = "loadgen_open_loop.py"
+RESULTS_DIR = "results_cpu_saturation"
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
 def get_metrics(url):
     try:
@@ -73,6 +77,39 @@ def run_test(url, monitor_url, rate, duration):
         
     return None, 0
 
+def plot_results(results):
+    rates = [r['rate'] for r in results]
+    
+    # Plot 1: Rate vs CPU Utilization
+    plt.figure(figsize=(10, 6))
+    plt.plot(rates, [r['cpu_util'] for r in results], marker='o', color='r')
+    plt.title("CPU Saturation: Rate vs CPU Utilization")
+    plt.xlabel("Request Rate (req/s)")
+    plt.ylabel("CPU Utilization (%)")
+    plt.grid(True)
+    plt.savefig(f"{RESULTS_DIR}/cpu_utilization.png")
+    plt.close()
+    
+    # Plot 2: Rate vs Throughput
+    plt.figure(figsize=(10, 6))
+    plt.plot(rates, [r['throughput'] for r in results], marker='o', color='b')
+    plt.title("CPU Saturation: Rate vs Throughput")
+    plt.xlabel("Request Rate (req/s)")
+    plt.ylabel("Throughput (ops/s)")
+    plt.grid(True)
+    plt.savefig(f"{RESULTS_DIR}/throughput.png")
+    plt.close()
+
+    # Plot 3: Rate vs Latency
+    plt.figure(figsize=(10, 6))
+    plt.plot(rates, [r['avg_latency'] * 1000 for r in results], marker='o', color='g')
+    plt.title("CPU Saturation: Rate vs Latency")
+    plt.xlabel("Request Rate (req/s)")
+    plt.ylabel("Avg Latency (ms)")
+    plt.grid(True)
+    plt.savefig(f"{RESULTS_DIR}/latency.png")
+    plt.close()
+
 def main():
     parser = argparse.ArgumentParser(description='CPU Saturation Test')
     parser.add_argument('--url', type=str, default="http://localhost:8080", help='Server URL')
@@ -85,6 +122,7 @@ def main():
     args = parser.parse_args()
     
     current_rate = args.start_rate
+    results = []
     
     print("Starting CPU Saturation Test (Workload 4: GET 1-100)")
     print(f"Target: Saturate CPU (>95%) or reach {args.max_rate} RPS")
@@ -98,6 +136,13 @@ def main():
         if data:
             print(f"{current_rate:<15} | {data['throughput']:<15.2f} | {data['avg_latency']:<15.4f} | {cpu_util:<15.2f} | {data['success']:<10}")
             
+            results.append({
+                'rate': current_rate,
+                'throughput': data['throughput'],
+                'avg_latency': data['avg_latency'],
+                'cpu_util': cpu_util
+            })
+
             if cpu_util > 95:
                 print("-" * 75)
                 print(f"CPU Saturated at ~{current_rate} req/s (CPU: {cpu_util:.2f}%)")
@@ -107,6 +152,10 @@ def main():
             
         current_rate += args.step
         time.sleep(2) # Cooldown
+
+    print(f"\nTest complete. Generating plots in {RESULTS_DIR}...")
+    plot_results(results)
+    print("Done.")
 
 if __name__ == "__main__":
     main()
