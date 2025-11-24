@@ -30,7 +30,7 @@ const std::vector<KeyValueServer::RouteDescriptor> KeyValueServer::routes_json =
 };
 
 KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::Policy policy, bool json_logging)
-    : host_(host), port_(port), inline_cache(policy), json_logging_enabled(json_logging) {
+    : host_(host), port_(port), inline_cache(policy, 1ULL * 1024 * 1024 * 1024), json_logging_enabled(json_logging) {
     server_boot_time = std::chrono::steady_clock::now();
 }
 
