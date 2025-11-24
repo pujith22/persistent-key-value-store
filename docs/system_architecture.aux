@@ -1,0 +1,105 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Purpose}{1}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}High-Level Architecture}{1}{section.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Compact layered architecture: request flow across server, cache, and persistence.}}{1}{figure.caption.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Architecture Updates}{1}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Thread Worker Pool \& Connection Pooling}{1}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Load Test Plan}{2}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Workloads}{2}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Testing Modes}{2}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Postman API Collection}{2}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Endpoint Catalog}{4}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Screenshots}{5}{section.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Root endpoint (service catalog)}}{5}{figure.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Home HTML endpoint}}{5}{figure.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Cache hit on get\_key}}{6}{figure.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Hydrating uncached key from persistence}}{6}{figure.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Key not found scenario}}{7}{figure.6}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Successful clean insert}}{7}{figure.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Insert conflict (409)}}{8}{figure.8}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Successful update operation}}{8}{figure.9}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Update when key absent (404)}}{9}{figure.10}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Successful deletion (204)}}{9}{figure.11}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Deletion when key not found}}{10}{figure.12}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces Bulk query results with mixed statuses}}{10}{figure.13}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces Bulk update transaction success report}}{11}{figure.14}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {15}{\ignorespaces Bulk update transaction failure and rollback}}{11}{figure.15}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {16}{\ignorespaces Metrics endpoint showing cache statistics}}{12}{figure.16}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {17}{\ignorespaces Health endpoint with uptime}}{12}{figure.17}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {18}{\ignorespaces Stop endpoint (dev only)}}{13}{figure.18}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {19}{\ignorespaces Structured JSON logging output sample}}{13}{figure.19}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {20}{\ignorespaces Server startup with custom cache eviction policy.}}{14}{figure.caption.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Load Test Results}{15}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Workload 1: Read-Heavy (85\% GET)}{15}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.1.1}Performance (Throughput \& Latency)}{15}{subsubsection.8.1.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {21}{\ignorespaces Closed Loop: Throughput vs Concurrency}}{15}{figure.21}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {22}{\ignorespaces Closed Loop: Avg Latency vs Concurrency}}{16}{figure.22}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {23}{\ignorespaces Open Loop: Throughput vs Arrival Rate}}{17}{figure.23}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {24}{\ignorespaces Open Loop: Avg Latency vs Arrival Rate}}{18}{figure.24}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {25}{\ignorespaces Closed Loop: P95 Latency}}{19}{figure.25}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {26}{\ignorespaces Open Loop: P95 Latency}}{20}{figure.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.1.2}System Resources (CPU \& Disk)}{21}{subsubsection.8.1.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {27}{\ignorespaces Closed Loop: CPU Utilization}}{21}{figure.27}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {28}{\ignorespaces Closed Loop: Disk Utilization}}{22}{figure.28}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {29}{\ignorespaces Open Loop: CPU Utilization}}{23}{figure.29}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {30}{\ignorespaces Open Loop: Disk Utilization}}{24}{figure.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.1.3}Cache \& Memory}{25}{subsubsection.8.1.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {31}{\ignorespaces Closed Loop: Cache Hit Ratio}}{25}{figure.31}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {32}{\ignorespaces Closed Loop: Cache Entries}}{26}{figure.32}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {33}{\ignorespaces Open Loop: Cache Hit Ratio}}{27}{figure.33}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {34}{\ignorespaces Open Loop: Cache Entries}}{28}{figure.34}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {35}{\ignorespaces Closed Loop: Memory RSS}}{29}{figure.35}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {36}{\ignorespaces Open Loop: Memory RSS}}{30}{figure.36}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Workload 2: Write-Heavy (50\% GET)}{31}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.1}Performance (Throughput \& Latency)}{31}{subsubsection.8.2.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {37}{\ignorespaces Closed Loop: Throughput vs Concurrency}}{31}{figure.37}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {38}{\ignorespaces Closed Loop: Avg Latency vs Concurrency}}{32}{figure.38}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {39}{\ignorespaces Open Loop: Throughput vs Arrival Rate}}{33}{figure.39}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {40}{\ignorespaces Open Loop: Avg Latency vs Arrival Rate}}{34}{figure.40}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {41}{\ignorespaces Closed Loop: P95 Latency}}{35}{figure.41}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {42}{\ignorespaces Open Loop: P95 Latency}}{36}{figure.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.2}System Resources (CPU \& Disk)}{37}{subsubsection.8.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {43}{\ignorespaces Closed Loop: CPU Utilization}}{37}{figure.43}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {44}{\ignorespaces Closed Loop: Disk Utilization}}{38}{figure.44}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {45}{\ignorespaces Open Loop: CPU Utilization}}{39}{figure.45}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {46}{\ignorespaces Open Loop: Disk Utilization}}{40}{figure.46}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.3}Cache \& Memory}{41}{subsubsection.8.2.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {47}{\ignorespaces Closed Loop: Cache Hit Ratio}}{41}{figure.47}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {48}{\ignorespaces Closed Loop: Cache Entries}}{42}{figure.48}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {49}{\ignorespaces Open Loop: Cache Hit Ratio}}{43}{figure.49}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {50}{\ignorespaces Open Loop: Cache Entries}}{44}{figure.50}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {51}{\ignorespaces Closed Loop: Memory RSS}}{45}{figure.51}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {52}{\ignorespaces Open Loop: Memory RSS}}{46}{figure.52}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Workload 3: Balanced (Mixed)}{47}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.1}Performance (Throughput \& Latency)}{47}{subsubsection.8.3.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {53}{\ignorespaces Closed Loop: Throughput vs Concurrency}}{47}{figure.53}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {54}{\ignorespaces Closed Loop: Avg Latency vs Concurrency}}{48}{figure.54}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {55}{\ignorespaces Open Loop: Throughput vs Arrival Rate}}{49}{figure.55}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {56}{\ignorespaces Open Loop: Avg Latency vs Arrival Rate}}{50}{figure.56}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {57}{\ignorespaces Closed Loop: P95 Latency}}{51}{figure.57}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {58}{\ignorespaces Open Loop: P95 Latency}}{52}{figure.58}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.2}System Resources (CPU \& Disk)}{53}{subsubsection.8.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {59}{\ignorespaces Closed Loop: CPU Utilization}}{53}{figure.59}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {60}{\ignorespaces Closed Loop: Disk Utilization}}{54}{figure.60}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {61}{\ignorespaces Open Loop: CPU Utilization}}{55}{figure.61}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {62}{\ignorespaces Open Loop: Disk Utilization}}{56}{figure.62}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.3}Cache \& Memory}{57}{subsubsection.8.3.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {63}{\ignorespaces Closed Loop: Cache Hit Ratio}}{57}{figure.63}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {64}{\ignorespaces Closed Loop: Cache Entries}}{58}{figure.64}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {65}{\ignorespaces Open Loop: Cache Hit Ratio}}{59}{figure.65}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {66}{\ignorespaces Open Loop: Cache Entries}}{60}{figure.66}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {67}{\ignorespaces Closed Loop: Memory RSS}}{61}{figure.67}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {68}{\ignorespaces Open Loop: Memory RSS}}{62}{figure.68}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Workload 4: CPU Saturation (100\% GET Hot Keys)}{63}{subsection.8.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {69}{\ignorespaces Rate vs CPU Utilization}}{63}{figure.69}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {70}{\ignorespaces Rate vs Throughput}}{63}{figure.70}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {71}{\ignorespaces Rate vs Latency}}{64}{figure.71}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Workload 5: Disk Saturation (100\% Write 1KB)}{65}{subsection.8.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {72}{\ignorespaces Rate vs Disk Utilization}}{65}{figure.72}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {73}{\ignorespaces Rate vs Write Throughput (MB/s)}}{65}{figure.73}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {74}{\ignorespaces Rate vs Latency}}{66}{figure.74}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Credits}{67}{section.9}\protected@file@percent }
+\gdef \@abspage@last{67}

@@ -42,7 +42,7 @@
 \definecolor{themelight}{HTML}{2F81F7}
 \definecolor{tablebg}{HTML}{F6F8FA}
 \definecolor{tablerule}{gray}{0.85}
-\graphicspath{{../assets/screenshots/}}
+\graphicspath{{../assets/screenshots/}{../results/}{../results_cpu_saturation/}{../results_disk_saturation/}}
 \setlength{\parskip}{0.6em}
 \setlength{\parindent}{0pt}
 \setlength{\emergencystretch}{2em}
@@ -86,17 +86,47 @@ A C++17 HTTP service providing a persistent key-value cache backed by PostgreSQL
     \node[box] (client) {\textbf{REST Client}};
     \node[box, below=of client] (server) {\textbf{HTTP Server}\\\small cpp-httplib};
     \node[box, below right=of server, xshift=10mm] (cache) {\textbf{Inline Cache}\\\small LRU / FIFO / Random};
-    \node[box, below left=of server, xshift=-10mm] (adapter) {\textbf{Persistence Adapter}\\\small abstraction};
-    \node[db, below=14mm of $(cache)!0.5!(adapter)$] (db) {\textbf{PostgreSQL DB}};
+    \node[box, below left=of server, xshift=-10mm] (adapter) {\textbf{Persistence Adapter}\\\small Async Worker Pool};
+    \node[box, below=of adapter] (pool) {\textbf{Connection Pool}\\\small libpq};
+    \node[db, below=14mm of $(cache)!0.5!(pool)$] (db) {\textbf{PostgreSQL DB}};
 
     \draw[arr] (client) -- (server);
     \draw[arr] (server) -- (cache);
     \draw[arr] (server) -- (adapter);
     \draw[arr] (cache) -- (adapter);
-    \draw[arr] (adapter) -- (db);
+    \draw[arr] (adapter) -- (pool);
+    \draw[arr] (pool) -- (db);
   \end{tikzpicture}}
   \caption{Compact layered architecture: request flow across server, cache, and persistence.}
 \end{figure}
+
+\section{Architecture Updates}
+\subsection{Thread Worker Pool \& Connection Pooling}
+To address performance bottlenecks associated with blocking database operations, we have introduced an asynchronous worker pool and connection pooling mechanism in the \texttt{PersistenceAdapter}.
+
+\begin{itemize}
+    \item \textbf{Connection Pooling}: The adapter maintains a pool of \texttt{libpq} connections (default size: 8). This eliminates connection establishment overhead and enables prepared statement reuse.
+    \item \textbf{Async Worker Pool}: A dedicated pool of worker threads handles database operations asynchronously. Tasks are submitted to a queue, picked up by free workers, executed using a pooled connection, and results are returned via \texttt{std::future}.
+\end{itemize}
+
+\section{Load Test Plan}
+We have designed a comprehensive load testing strategy with different workloads and testing modes.
+
+\subsection{Workloads}
+\begin{itemize}
+    \item \textbf{Workload 1 (Read-Heavy)}: 85\% GET, 15\% Write. Simulates cache-friendly traffic.
+    \item \textbf{Workload 2 (Write-Heavy)}: 50\% GET, 50\% Write. Simulates high-churn environments.
+    \item \textbf{Workload 3 (Balanced)}: Mixed read/write with hot/cold key distribution.
+    \item \textbf{Workload 4 (CPU Saturation)}: 100\% GET on hot keys (1-100). Stresses CPU/Memory.
+    \item \textbf{Workload 5 (Disk Saturation)}: 100\% Write (1KB payloads). Stresses Disk I/O.
+\end{itemize}
+
+\subsection{Testing Modes}
+\begin{itemize}
+    \item \textbf{Closed-Loop}: Fixed concurrency (threads). Measures throughput/latency.
+    \item \textbf{Open-Loop}: Fixed arrival rate (Poisson). Measures stability/tail latency.
+    \item \textbf{Saturation}: Pushes specific resources (CPU, Disk) to limits.
+\end{itemize}
 
 % Postman API Collection (moved below Purpose + Architecture)
 \section{Postman API Collection}
@@ -212,8 +242,79 @@ The service exposes the following HTTP endpoints.
 \end{figure}
 \clearpage
 
-% (legacy minipage-based screenshot blocks removed in favor of StackImagePair)
+\section{Load Test Results}
+The following graphs illustrate the system's performance under different workloads and testing modes.
 
+\subsection{Workload 1: Read-Heavy (85\% GET)}
+\subsubsection{Performance (Throughput \& Latency)}
+\StackImagePair{workload_1_closed_throughput.png}{Closed Loop: Throughput vs Concurrency}{workload_1_closed_avg_latency.png}{Closed Loop: Avg Latency vs Concurrency}
+\StackImagePair{workload_1_open_throughput.png}{Open Loop: Throughput vs Arrival Rate}{workload_1_open_avg_latency.png}{Open Loop: Avg Latency vs Arrival Rate}
+\StackImagePair{workload_1_closed_p95_latency.png}{Closed Loop: P95 Latency}{workload_1_open_p95_latency.png}{Open Loop: P95 Latency}
+
+\subsubsection{System Resources (CPU \& Disk)}
+\StackImagePair{workload_1_closed_server_cpu.png}{Closed Loop: CPU Utilization}{workload_1_closed_server_disk.png}{Closed Loop: Disk Utilization}
+\StackImagePair{workload_1_open_server_cpu.png}{Open Loop: CPU Utilization}{workload_1_open_server_disk.png}{Open Loop: Disk Utilization}
+
+\subsubsection{Cache \& Memory}
+\StackImagePair{workload_1_closed_cache_hit_ratio.png}{Closed Loop: Cache Hit Ratio}{workload_1_closed_cache_entries.png}{Closed Loop: Cache Entries}
+\StackImagePair{workload_1_open_cache_hit_ratio.png}{Open Loop: Cache Hit Ratio}{workload_1_open_cache_entries.png}{Open Loop: Cache Entries}
+\StackImagePair{workload_1_closed_server_mem_rss.png}{Closed Loop: Memory RSS}{workload_1_open_server_mem_rss.png}{Open Loop: Memory RSS}
+
+\subsection{Workload 2: Write-Heavy (50\% GET)}
+\subsubsection{Performance (Throughput \& Latency)}
+\StackImagePair{workload_2_closed_throughput.png}{Closed Loop: Throughput vs Concurrency}{workload_2_closed_avg_latency.png}{Closed Loop: Avg Latency vs Concurrency}
+\StackImagePair{workload_2_open_throughput.png}{Open Loop: Throughput vs Arrival Rate}{workload_2_open_avg_latency.png}{Open Loop: Avg Latency vs Arrival Rate}
+\StackImagePair{workload_2_closed_p95_latency.png}{Closed Loop: P95 Latency}{workload_2_open_p95_latency.png}{Open Loop: P95 Latency}
+
+\subsubsection{System Resources (CPU \& Disk)}
+\StackImagePair{workload_2_closed_server_cpu.png}{Closed Loop: CPU Utilization}{workload_2_closed_server_disk.png}{Closed Loop: Disk Utilization}
+\StackImagePair{workload_2_open_server_cpu.png}{Open Loop: CPU Utilization}{workload_2_open_server_disk.png}{Open Loop: Disk Utilization}
+
+\subsubsection{Cache \& Memory}
+\StackImagePair{workload_2_closed_cache_hit_ratio.png}{Closed Loop: Cache Hit Ratio}{workload_2_closed_cache_entries.png}{Closed Loop: Cache Entries}
+\StackImagePair{workload_2_open_cache_hit_ratio.png}{Open Loop: Cache Hit Ratio}{workload_2_open_cache_entries.png}{Open Loop: Cache Entries}
+\StackImagePair{workload_2_closed_server_mem_rss.png}{Closed Loop: Memory RSS}{workload_2_open_server_mem_rss.png}{Open Loop: Memory RSS}
+
+\subsection{Workload 3: Balanced (Mixed)}
+\subsubsection{Performance (Throughput \& Latency)}
+\StackImagePair{workload_3_closed_throughput.png}{Closed Loop: Throughput vs Concurrency}{workload_3_closed_avg_latency.png}{Closed Loop: Avg Latency vs Concurrency}
+\StackImagePair{workload_3_open_throughput.png}{Open Loop: Throughput vs Arrival Rate}{workload_3_open_avg_latency.png}{Open Loop: Avg Latency vs Arrival Rate}
+\StackImagePair{workload_3_closed_p95_latency.png}{Closed Loop: P95 Latency}{workload_3_open_p95_latency.png}{Open Loop: P95 Latency}
+
+\subsubsection{System Resources (CPU \& Disk)}
+\StackImagePair{workload_3_closed_server_cpu.png}{Closed Loop: CPU Utilization}{workload_3_closed_server_disk.png}{Closed Loop: Disk Utilization}
+\StackImagePair{workload_3_open_server_cpu.png}{Open Loop: CPU Utilization}{workload_3_open_server_disk.png}{Open Loop: Disk Utilization}
+
+\subsubsection{Cache \& Memory}
+\StackImagePair{workload_3_closed_cache_hit_ratio.png}{Closed Loop: Cache Hit Ratio}{workload_3_closed_cache_entries.png}{Closed Loop: Cache Entries}
+\StackImagePair{workload_3_open_cache_hit_ratio.png}{Open Loop: Cache Hit Ratio}{workload_3_open_cache_entries.png}{Open Loop: Cache Entries}
+\StackImagePair{workload_3_closed_server_mem_rss.png}{Closed Loop: Memory RSS}{workload_3_open_server_mem_rss.png}{Open Loop: Memory RSS}
+
+\subsection{Workload 4: CPU Saturation (100\% GET Hot Keys)}
+\StackImagePair{cpu_utilization.png}{Rate vs CPU Utilization}{throughput.png}{Rate vs Throughput}
+\begin{center}
+    \begin{minipage}{1.0\textwidth}\centering
+      \includegraphics[width=1.0\textwidth]{latency.png}
+      \captionof{figure}{Rate vs Latency}
+    \end{minipage}
+\end{center}\clearpage
+
+\subsection{Workload 5: Disk Saturation (100\% Write 1KB)}
+\StackImagePair{disk_utilization.png}{Rate vs Disk Utilization}{disk_throughput.png}{Rate vs Write Throughput (MB/s)}
+\begin{center}
+    \begin{minipage}{1.0\textwidth}\centering
+      % Note: latency.png name conflicts with cpu saturation folder, but graphicspath order matters.
+      % To avoid ambiguity, we should rename them or rely on path order. 
+      % Since graphicspath searches in order, and we have both folders, 'latency.png' is ambiguous.
+      % However, latex graphicspath finds the first match.
+      % To fix this, we should probably rename the files in the saturation scripts or use explicit paths.
+      % But since I cannot rename files easily here without running scripts again, I will assume the user is okay 
+      % or I will try to use the relative path if possible, but graphicspath makes it tricky.
+      % Actually, standard latex \includegraphics can take a path.
+      \includegraphics[width=1.0\textwidth]{../results_disk_saturation/latency.png}
+      \captionof{figure}{Rate vs Latency}
+    \end{minipage}
+\end{center}\clearpage
 
 \section{Credits}
 Third-party libraries: \href{https://github.com/nlohmann/json}{nlohmann/json} and \href{https://github.com/yhirose/cpp-httplib}{cpp-httplib}. Licensed under MIT (see project LICENSE).
