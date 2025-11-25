@@ -93,12 +93,16 @@ The server will read `SERVER_HOST` and `SERVER_PORT` from the environment at sta
 New CLI flags
 - `--no-preload` or `--skip-preload` — skip preloading keys from persistence into the inline cache during startup. By default the server synchronously preloads keys 1..1000 from the database into the inline cache before it begins accepting connections (this can increase startup time but reduces cold-cache misses).
 
+- `--no-logging` or `--no-logs` — disable all console logging (both JSON and plain text). Useful for running the server in environments where stdout/stderr should be quiet or logs are shipped via an alternate mechanism.
+
+- `--no-metrics` or `--disable-metrics` — disable collection and computation of system/process metrics. When metrics are disabled the `/metrics` endpoint returns a lightweight 200 response noting that metrics are disabled and no `/proc` or `/sys` reads are performed. This is useful to reduce CPU and I/O overhead on constrained test hosts or when metrics are collected externally.
+
 Connection pooling and async DB worker pool
 - The persistence adapter now maintains a pool of libpq connections and an internal worker thread pool to offload blocking database operations. This reduces HTTP worker thread starvation under heavy load.
 - Prepared statements required by the adapter are created on each pooled connection at startup. Connections that fail to prepare are dropped and exposed via pool metrics.
 
 Upgraded `/metrics` end point
-- The `/metrics` end currently returns a JSON document containing cache stats and persistence pool metrics. It also exposes several system-level metrics useful for stress tests and load generators. Key fields include:
+- The `/metrics` endpoint currently returns a JSON document containing cache stats and persistence pool metrics. It also exposes several system-level metrics useful for stress tests and load generators. When metrics collection is disabled via `--no-metrics`, the endpoint returns a tiny JSON payload (200 OK) indicating metrics are disabled and does not perform any system reads. Key fields include:
        - `cpu_utilization_percent` — CPU busy percentage since the last `/metrics` sample (kernel counters based)
        - `memory_kb` — object with `total`, `free`, and `available` (in kB)
        - `disk_read_bytes`, `disk_write_bytes` — cumulative bytes read/written across block devices (derived from `/sys/block/*/stat` sectors; converted assuming 512B sectors)

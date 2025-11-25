@@ -41,6 +41,12 @@ public:
     // Allow skipping preload of cache on startup
     void setSkipPreload(bool skip) { skip_preload = skip; }
 
+    // Enable or disable all stdout/stderr logging (both JSON and plain text). Default: enabled.
+    void setLoggingEnabled(bool enable) { logging_enabled = enable; }
+
+    // Enable or disable the `/metrics` endpoint computation. If disabled, the endpoint will be short-circuited.
+    void setMetricsEnabled(bool enable) { metrics_enabled = enable; }
+
     // Allow tests/consumers to inject custom persistence implementation.
     void setPersistenceProvider(std::unique_ptr<PersistenceProvider> provider, const std::string& status_label = "injected");
 
@@ -86,6 +92,10 @@ private:
 
     // logging mode flag
     bool json_logging_enabled{false};
+    // overall logging enabled (controls whether any std::cout/std::cerr is emitted)
+    bool logging_enabled{true};
+    // whether metrics collection and computation is enabled
+    bool metrics_enabled{true};
     std::chrono::steady_clock::time_point server_boot_time{};
     // persistence adapter is required; start() fails fast if unavailable
     std::unique_ptr<PersistenceProvider> persistence_adapter;

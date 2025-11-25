@@ -81,7 +81,8 @@ public:
         // new entry
         size_t entryOverhead = sizeof(Entry) + value.size();
         bucket.entries.push_front(Entry{key, value, now(), {}, fifoCounter_++});
-        auto listIter = lruList_.insert(lruList_.begin(), key); // most recent at front
+    std::lock_guard<std::mutex> lru_lock(lruMutex_);
+    auto listIter = lruList_.insert(lruList_.begin(), key); // most recent at front
         bucket.entries.front().lru_iterator = listIter;
         stats_.size_entries++;
         stats_.bytes_estimated += entryOverhead;
@@ -101,7 +102,8 @@ public:
         }
         size_t entryOverhead = sizeof(Entry) + value.size();
         bucket.entries.push_front(Entry{key, value, now(), {}, fifoCounter_++});
-        auto listIter = lruList_.insert(lruList_.begin(), key);
+    std::lock_guard<std::mutex> lru_lock(lruMutex_);
+    auto listIter = lruList_.insert(lruList_.begin(), key);
         bucket.entries.front().lru_iterator = listIter;
         stats_.size_entries++;
         stats_.bytes_estimated += entryOverhead;

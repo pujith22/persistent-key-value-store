@@ -60,6 +60,22 @@ static bool parse_json_logging(int argc, char** argv) {
     return false;
 }
 
+static bool parse_no_logging(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--no-logging" || arg == "--no-logs") return true;
+    }
+    return false;
+}
+
+static bool parse_no_metrics(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--no-metrics" || arg == "--disable-metrics") return true;
+    }
+    return false;
+}
+
 static bool parse_skip_preload(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -87,6 +103,10 @@ int main(int argc, char** argv) {
     }
 
     KeyValueServer server{host, port, policy, enable_json_logging};
+    bool disable_logging = parse_no_logging(argc, argv);
+    if (disable_logging) server.setLoggingEnabled(false);
+    bool disable_metrics = parse_no_metrics(argc, argv);
+    if (disable_metrics) server.setMetricsEnabled(false);
     bool skip_preload = parse_skip_preload(argc, argv);
     if (skip_preload) server.setSkipPreload(true);
     server.setupRoutes();

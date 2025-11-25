@@ -37,6 +37,7 @@ KeyValueServer::KeyValueServer(const std::string& host, int port, InlineCache::P
 KeyValueServer::~KeyValueServer() = default;
 
 void KeyValueServer::logRequest(const httplib::Request& req) {
+    if (!logging_enabled) return;
     if (json_logging_enabled) {
         nlohmann::json j{{"type","request"},{"method",req.method},{"path",req.path}};
         // include path params, query params and body size for richer diagnostics
@@ -56,6 +57,7 @@ void KeyValueServer::logRequest(const httplib::Request& req) {
 
 void KeyValueServer::logResponse(const httplib::Response& res, std::chrono::steady_clock::duration duration) {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    if (!logging_enabled) return;
     if (json_logging_enabled) {
         nlohmann::json j{{"type","response"},{"status",res.status},{"reason",res.reason},
                          {"content_type",res.get_header_value("Content-Type")},{"bytes",res.body.size()},
@@ -906,7 +908,8 @@ void KeyValueServer::setupRoutes() {
 
 bool KeyValueServer::start() {
     auto emit_startup_log = [&](bool success, const std::string& message) {
-        if (json_logging_enabled) {
+            if (!logging_enabled) return;
+            if (json_logging_enabled) {
             auto now_sys = std::chrono::system_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_sys.time_since_epoch()).count();
             nlohmann::json j;
@@ -927,21 +930,21 @@ bool KeyValueServer::start() {
             }
             if (!success) j["action"] = "shutdown";
             std::cout << j.dump() << std::endl;
-        } else {
-            if (success) {
-                std::cout << "Http server listening at " << host_ << ":" << port_
-                          << " policy=" << (inline_cache.policy() == InlineCache::Policy::LRU ? "LRU" : inline_cache.policy() == InlineCache::Policy::FIFO ? "FIFO" : "Random")
-                          << " db_status=" << db_connection_status
-                          << " json_logs=" << (json_logging_enabled?"1":"0");
-                if (!message.empty()) {
-                    std::cout << ' ' << message;
-                }
-                std::cout << "\n";
             } else {
-                std::cerr << "Startup aborted: " << message
-                          << " (db_status=" << db_connection_status << ")\n";
+                if (success) {
+                    std::cout << "Http server listening at " << host_ << ":" << port_
+                              << " policy=" << (inline_cache.policy() == InlineCache::Policy::LRU ? "LRU" : inline_cache.policy() == InlineCache::Policy::FIFO ? "FIFO" : "Random")
+                              << " db_status=" << db_connection_status
+                              << " json_logs=" << (json_logging_enabled?"1":"0");
+                    if (!message.empty()) {
+                        std::cout << ' ' << message;
+                    }
+                    std::cout << "\n";
+                } else {
+                    std::cerr << "Startup aborted: " << message
+                              << " (db_status=" << db_connection_status << ")\n";
+                }
             }
-        }
     };
 
     auto abort_startup = [&](const std::string& status, const std::string& reason) {
@@ -990,11 +993,13 @@ bool KeyValueServer::start() {
                     ++preload_loaded;
                 }
                 if (preload_attempts % 100 == 0) {
-                    std::cout << "Preload progress: attempted=" << preload_attempts << " loaded=" << preload_loaded << "\n";
+                    if (logging_enabled) {
+                        std::cout << "Preload progress: attempted=" << preload_attempts << " loaded=" << preload_loaded << "\n";
+                    }
                 }
             } catch (const std::exception &e) {
                 // log and continue
-                std::cerr << "Preload error for key=" << k << " : " << e.what() << "\n";
+                if (logging_enabled) std::cerr << "Preload error for key=" << k << " : " << e.what() << "\n";
             }
         }
     }
@@ -1052,6 +1057,13 @@ void KeyValueServer::healthHandler(const httplib::Request& req, httplib::Respons
 void KeyValueServer::metricsHandler(const httplib::Request& req, httplib::Response& res) {
     auto start = std::chrono::steady_clock::now();
     logRequest(req);
+    if (!metrics_enabled) {
+        // Lightweight response when metrics are disabled: avoid any /proc or /sys reads.
+        nlohmann::json out{{"metrics","disabled"},{"reason","metrics collection disabled by server configuration"}};
+        json_response(res, 200, out, "ok");
+        logResponse(res, std::chrono::steady_clock::now() - start);
+        return;
+    }
     auto st = inline_cache.stats();
     nlohmann::json out{{"entries",st.size_entries},{"bytes",st.bytes_estimated},{"hits",st.hits},{"misses",st.misses},{"evictions",st.evictions}};
     // attach persistence adapter pool metrics if available
